@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Code pipeline">
+  <rect width="64" height="64" rx="14" fill="#182337"/>
+  <path d="M12 20h12l8 12 8-12h12M12 44h12l8-12 8 12h12" fill="none" stroke="#80D9D1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="12" cy="20" r="4" fill="#FFD283"/><circle cx="52" cy="44" r="4" fill="#FFD283"/>
+  <circle cx="32" cy="32" r="5" fill="#F5F7FF"/>
+</svg>

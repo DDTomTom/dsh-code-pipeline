@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Code Pipeline Agent",
+    "description": "Routes code tasks through Sol, Opus, and DeepSeek with independent evidence review."
+  }
+}
