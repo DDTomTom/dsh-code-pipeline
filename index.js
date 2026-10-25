@@ -4,19 +4,23 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { runPipeline } from './core.js'
 import { assessHealth, createTracker } from './tracker.js'
+import { createHistoryStore, historyDigest } from './history.js'
 import { applyRoutePatch, loadRouteOverrides, mergeRoutes, roleLabel, saveRouteOverrides, STAGE_ROLES } from './settings.js'
 
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
 const MAX_SESSION_MODES = 500
+export const MODES = ['off', 'auto', 'always']
+/** manual is not on the panel slider; it stays reachable through /pipeline for pending-start sessions. */
+const ALL_MODES = [...MODES, 'manual']
 
-/** Per-session start mode (auto|manual), persisted so a restart keeps the user's choice. */
+/** Per-session pipeline mode, persisted so a restart keeps the user's choice. */
 export function createModeStore(file) {
   const modes = new Map()
   try {
     const raw = JSON.parse(readFileSync(file, 'utf8'))
-    for (const [id, mode] of Object.entries(raw?.sessions || {})) if (mode === 'auto' || mode === 'manual') modes.set(id, mode)
+    for (const [id, mode] of Object.entries(raw?.sessions || {})) if (ALL_MODES.includes(mode)) modes.set(id, mode)
   } catch { /* first use or unreadable: start empty */ }
-  const save = () => {
+  const write = () => {
     try {
       mkdirSync(dirname(file), { recursive: true })
       const tmp = `${file}.${process.pid}.tmp`
@@ -27,10 +31,34 @@ export function createModeStore(file) {
   return {
     get: id => modes.get(String(id)),
     set(id, mode) {
+      if (!ALL_MODES.includes(mode)) return
       modes.delete(String(id))
       modes.set(String(id), mode)
       while (modes.size > MAX_SESSION_MODES) modes.delete(modes.keys().next().value)
-      save()
+      write()
+    },
+  }
+}
+
+/** Profile-wide default mode used by every session that has no /pipeline override. */
+export function createDefaultMode(file, fallback = 'auto') {
+  let current = ALL_MODES.includes(fallback) ? fallback : 'auto'
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    if (ALL_MODES.includes(raw?.mode)) current = raw.mode
+  } catch { /* first use: keep the configured default */ }
+  return {
+    get: () => current,
+    set(mode) {
+      if (!MODES.includes(mode) || mode === current) return current === mode ? true : false
+      current = mode
+      try {
+        mkdirSync(dirname(file), { recursive: true })
+        const tmp = `${file}.${process.pid}.tmp`
+        writeFileSync(tmp, `${JSON.stringify({ mode: current }, null, 2)}\n`)
+        renameSync(tmp, file)
+      } catch { /* the in-memory choice still applies */ }
+      return true
     },
   }
 }
@@ -78,14 +106,21 @@ export function apply(ctx, config = {}) {
   let overrides = loadRouteOverrides(routesFile)
   let routes = mergeRoutes(baseRoutes, overrides)
   const backend = config.backend || 'spawn'
+  // config.startMode has always meant "what a fresh session does"; a manual default becomes 'auto + pending start'.
   const startMode = config.startMode === 'manual' ? 'manual' : 'auto'
   const modeStore = createModeStore(config.stateFile || join(DSH_HOME, 'code-pipeline', 'session-modes.json'))
-  const modeFor = id => modeStore.get(id) || startMode
+  const defaultMode = createDefaultMode(
+    config.modeFile || join(DSH_HOME, 'code-pipeline', 'default-mode.json'),
+    startMode === 'manual' ? 'auto' : startMode,
+  )
+  const pendingStart = startMode === 'manual'
+  const modeFor = id => modeStore.get(id) || defaultMode.get()
   const pluginAbort = new AbortController()
   ctx.effect(() => () => pluginAbort.abort(), 'code-pipeline.cancel-on-unload')
 
   // ---- live progress + health for the floating panel ------------------------------
   const tracker = createTracker()
+  const history = createHistoryStore(config.historyFile || join(DSH_HOME, 'code-pipeline', 'history.json'))
   let routeChecks = []
   let routeCheckedAt = 0
   let routeCheckRunning
@@ -105,7 +140,12 @@ export function apply(ctx, config = {}) {
     routeChecks, checkedAt: routeCheckedAt,
     lastRun: tracker.snapshot().runs[0],
   })
-  const stateView = () => ({ ...tracker.snapshot(), health: healthView() })
+  const stateView = () => ({
+    ...tracker.snapshot(),
+    health: healthView(),
+    mode: { default: defaultMode.get() },
+    history: historyDigest(history.list()),
+  })
   if (typeof ctx.inject === 'function') {
     // First probe shortly after load, then every 10 minutes; probes resolve catalogs only (no model calls).
     ctx.inject(['timer'], timerCtx => {
@@ -212,6 +252,27 @@ export function apply(ctx, config = {}) {
           }
           if (pathname === '/dsh-code-pipeline/state' && req.method === 'GET') return json(200, stateView())
           if (pathname === '/dsh-code-pipeline/health' && req.method === 'POST') { await checkRoutes(); return json(200, stateView()) }
+          if (pathname === '/dsh-code-pipeline/mode' && req.method === 'POST') {
+            try {
+              const body = await readJsonBody(req)
+              if (!MODES.includes(body?.mode)) return json(400, { ok: false, reason: `mode must be one of ${MODES.join('/')}` })
+              defaultMode.set(body.mode)
+              return json(200, { ok: true, ...stateView() })
+            } catch (error) { return json(400, { ok: false, reason: String(error?.message || error).slice(0, 200) }) }
+          }
+          if (pathname === '/dsh-code-pipeline/history' && req.method === 'GET') {
+            const id = new URL(String(req.url || '/'), 'http://local').searchParams.get('id')
+            if (id) {
+              const run = history.get(id)
+              return run ? json(200, run) : json(404, { error: 'no such run' })
+            }
+            return json(200, { runs: historyDigest(history.list()) })
+          }
+          if (pathname === '/dsh-code-pipeline/history/clear' && req.method === 'POST') {
+            const before = history.size
+            history.clear()
+            return json(200, { ok: true, cleared: before })
+          }
           if (pathname === '/dsh-code-pipeline/settings' && req.method === 'GET') {
             try { return json(200, await settingsView()) }
             catch (error) { return json(500, { error: String(error?.message || error).slice(0, 200) }) }
@@ -252,7 +313,12 @@ export function apply(ctx, config = {}) {
     text: assembly => {
       const agent = assembly.agent
       if (phaseChildren.has(String(agent?.id || '')) || agent?.session?.header?.origin === 'subagent') return ''
-      const trigger = modeFor(agent?.id) === 'manual'
+      const mode = modeFor(agent?.id)
+      if (mode === 'off') return ''
+      if (mode === 'always') {
+        return 'This session runs every user turn through code_pipeline: call it exactly once per user turn, including questions, tiny edits and follow-ups, instead of answering directly. Never use it recursively; if it reports needs_input, ask only that question; if not_verified or reviewed_unverified, do not report full verification. The stage tool does not override existing approval or sandbox policies.'
+      }
+      const trigger = mode === 'manual' || pendingStart && !modeStore.get(agent?.id)
         ? 'Pending-start mode: only call code_pipeline after the user explicitly says to start implementing (for example 开始/执行/动手); until then discuss and refine the plan without edits.'
         : 'For a user request to IMPLEMENT or FIX code, use code_pipeline once as the default execution path.'
       return `${trigger} For discussion, explanation, research or code review without requested edits, do not call it. Never use it recursively; if it reports needs_input, ask only that question; if not_verified or reviewed_unverified, do not report full verification. The stage tool does not override existing approval or sandbox policies.`
@@ -260,22 +326,29 @@ export function apply(ctx, config = {}) {
   }), 'code-pipeline.routing')
 
   // `/pipeline` is a human command: switching mode or probing routes costs no model tokens.
-  const usage = '用法：/pipeline auto | manual | status | routes'
+  const usage = '用法：/pipeline off | auto | always | manual | status | routes'
+  const modeLabel = mode => ({ off: '关闭', auto: '自动判断', always: '每次都用', manual: '待启动' })[mode] || mode
   const pipelineCommand = {
     name: 'pipeline',
-    description: '复合代码流水线：切换本会话 自动/待启动 模式，或检查各阶段模型线路',
-    input: { hint: 'auto | manual | status | routes' },
+    description: '复合代码流水线：切换本会话的 关闭/自动/总是/待启动 模式，或检查各阶段模型线路',
+    input: { hint: 'off | auto | always | manual | status | routes' },
     handler: async invocation => {
       const arg = String(invocation?.rawInput ?? '').trim().toLowerCase()
       const id = invocation?.agent?.id
-      if (arg === 'auto' || arg === 'manual') {
+      if (['off', 'auto', 'always', 'manual'].includes(arg)) {
         if (id === undefined) return { kind: 'error', text: '无法识别当前会话，模式未切换。' }
         modeStore.set(id, arg)
-        return { kind: 'success', text: arg === 'auto' ? '本会话：自动模式（收到实现/修复指令即启动流水线）。' : '本会话：待启动模式（讨论阶段不改文件，你明确说开始后才启动）。' }
+        const note = {
+          off: '本会话：关闭（不再提示调用流水线）。',
+          auto: '本会话：自动判断（收到实现/修复指令才启动）。',
+          always: '本会话：每次都用（每一轮都走流水线，包括提问）。',
+          manual: '本会话：待启动（讨论阶段不改文件，你明确说开始后才启动）。',
+        }[arg]
+        return { kind: 'success', text: note }
       }
       if (arg === '' || arg === 'status') {
-        const mode = id === undefined ? startMode : modeFor(id)
-        return { kind: 'success', text: `本会话：${mode === 'auto' ? '自动' : '待启动'}模式（默认 ${startMode}）。${usage}` }
+        const mode = id === undefined ? defaultMode.get() : modeFor(id)
+        return { kind: 'success', text: `本会话：${modeLabel(mode)}（全局默认 ${modeLabel(defaultMode.get())}）。${usage}` }
       }
       if (arg === 'routes') {
         await checkRoutes()
@@ -321,6 +394,20 @@ export function apply(ctx, config = {}) {
       if (!ctx.subagents.getProvider(backend)) return { status: 'unavailable', reason: `subagent backend ${backend} is absent` }
       const signal = AbortSignal.any([exec.signal, pluginAbort.signal])
       const run = tracker.startRun({ sessionId: parent.id, task: args.task, mode: args.mode, escalation: args.escalation })
+      // What a phase concluded, so the panel can show it when the user clicks that step.
+      const summarize = r => {
+        const parts = []
+        const s = r?.structured
+        if (s && typeof s === 'object') {
+          if (typeof s.goal === 'string' && s.goal) parts.push(`目标\n${s.goal}`)
+          if (Array.isArray(s.acceptance) && s.acceptance.length) parts.push(`完成标准\n${s.acceptance.join('\n')}`)
+          if (Array.isArray(s.evidence) && s.evidence.length) parts.push(`证据\n${s.evidence.join('\n')}`)
+          if (Array.isArray(s.findings) && s.findings.length) parts.push(`发现\n${s.findings.join('\n')}`)
+          if (typeof s.question === 'string' && s.question) parts.push(`需要确认\n${s.question}`)
+        }
+        if (r?.output) parts.push(r.output)
+        return parts.join('\n\n')
+      }
       const call = async (role, prompt, outputSchema) => {
         const route = routes[role]
         const ph = run.phase(role, route ? `${route.provider}/${route.model}` : '未配置')
@@ -328,9 +415,9 @@ export function apply(ctx, config = {}) {
           const model = await resolveRoute(ctx.llm, role, route, signal)
           ph.route(`${route.provider}/${model}`)
           const r = await callResolved(role, route, model, prompt, outputSchema)
-          if (r.stopReason !== 'completed') ph.end('failed', r.stopReason)
-          else if (r.structured?.passed === false) ph.end('rejected', '未通过')
-          else ph.end('done')
+          if (r.stopReason !== 'completed') ph.end('failed', r.stopReason, summarize(r))
+          else if (r.structured?.passed === false) ph.end('rejected', '未通过', summarize(r))
+          else ph.end('done', '', summarize(r))
           return r
         } catch (error) {
           ph.end('failed', error?.message)
@@ -393,6 +480,12 @@ export function apply(ctx, config = {}) {
       }
       let result
       try {
+        // ops_bash reports stdout/stderr as structured values; only their text is meaningful here.
+        const textOf = value => {
+          if (typeof value === 'string') return value
+          if (value && typeof value === 'object') return String(value.text ?? value.content ?? '')
+          return value == null ? '' : String(value)
+        }
         const shell = (command, description) => ctx.tools.execute({
           callId: randomUUID(), rootCallId: exec.rootCallId, parent: exec.token,
           name: 'ops_bash', agent: parent, signal: signal,
@@ -403,8 +496,8 @@ export function apply(ctx, config = {}) {
           const ph = run.phase('facts', 'git · 本地')
           try {
             const r = await shell('git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "NOT_A_GIT_REPOSITORY"; exit 0; }; echo "## git status --porcelain -uall"; git status --porcelain=v1 -uall; echo "## git diff --stat HEAD"; git diff --stat HEAD; echo "## HEAD"; git log -1 --format="%h %s"', 'Collect workspace facts for independent review')
-            const out = String(r?.value?.stdout || '').trim()
-            ph.end('done', out === 'NOT_A_GIT_REPOSITORY' ? '非 Git 仓库' : '')
+            const out = textOf(r?.value?.stdout).trim()
+            ph.end('done', out === 'NOT_A_GIT_REPOSITORY' ? '非 Git 仓库' : '', out === 'NOT_A_GIT_REPOSITORY' ? '' : out)
             return out === 'NOT_A_GIT_REPOSITORY' ? '工作目录不是 Git 仓库：总控无法提供变更清单。' : out
           } catch (error) {
             ph.end('failed', error?.message)
@@ -420,17 +513,18 @@ export function apply(ctx, config = {}) {
           try {
             const check = await shell(command, 'Independently check code task result')
             const value = check.value
+            const io = `${textOf(value?.stdout)}${textOf(value?.stderr)}`.trim().slice(-1200)
             if (!check.isError && value?.status === 'completed' && value?.exitCode === 0) {
-              ph.end('done', '退出码 0')
+              ph.end('done', '退出码 0', `$ ${command}\n${io}`)
               return { passed: true, checks: ['Independent reviewer read a file', `${command} exited 0 in ${args.checkWorkdir || 'session directory'}`] }
             }
             // Only an explicit user test command that ran and failed feeds back into bounded repair.
             if (args.checkCommand && Number.isInteger(value?.exitCode) && value.exitCode !== 0) {
-              ph.end('rejected', `退出码 ${value.exitCode}`)
+              ph.end('rejected', `退出码 ${value.exitCode}`, `$ ${command}\n${io}`)
               const tail = String(value.stdout || '').slice(-1500) + String(value.stderr || '').slice(-500)
               return { passed: false, failureKind: 'test_failed', findings: [`${args.checkCommand} exited ${value.exitCode}`, tail] }
             }
-            ph.end('failed', Number.isInteger(value?.exitCode) ? `退出码 ${value.exitCode}` : '未得到退出码')
+            ph.end('failed', Number.isInteger(value?.exitCode) ? `退出码 ${value.exitCode}` : '未得到退出码', `$ ${command}\n${io}`)
           } catch (error) { ph.end('failed', error?.message) }
           return { passed: false, findings: ['Independent check did not return a successful exit code.'] }
         }, collect)
@@ -452,6 +546,8 @@ export function apply(ctx, config = {}) {
         }
       } finally {
         run.finish(result)
+        // Archive the finished run so the panel can still show it after the next run or a restart.
+        try { history.add(tracker.snapshot().runs[0]) } catch { /* history is best effort */ }
       }
       return result
     },

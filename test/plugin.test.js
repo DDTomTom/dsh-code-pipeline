@@ -58,7 +58,7 @@ test('native structured_output remains available to reviewer and executor cannot
     },
   }
   apply(ctx, {
-    routesFile: join(dir, 'routes.json'), stateFile: join(dir, 'modes.json'),
+    routesFile: join(dir, 'routes.json'), stateFile: join(dir, 'modes.json'), modeFile: join(dir, 'default-mode.json'),
     routes: { execution: { provider: 'deepseek-official', model: 'deepseek-flash' }, verification: { provider: 'openai', model: 'gpt-6-sol' } },
   })
   try {

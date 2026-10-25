@@ -45,15 +45,16 @@ export function createTracker(now = () => Date.now()) {
       id: run.id,
       phase(role, route) {
         if (role === 'execution') run.attempt = run.phases.filter(p => p.role === 'execution').length + 1
-        const entry = { role, label: ROLE_LABELS[role] || role, route: route || '', status: 'running', startedAt: now(), endedAt: undefined, note: '' }
+        const entry = { role, label: ROLE_LABELS[role] || role, route: route || '', status: 'running', startedAt: now(), endedAt: undefined, note: '', detail: '' }
         run.phases.push(entry)
         touch()
         return {
           route(value) { entry.route = value; touch() },
-          end(status = 'done', note = '') {
+          end(status = 'done', note = '', detail = '') {
             if (entry.status !== 'running') return
             entry.status = status
             entry.note = clip(note, 200)
+            entry.detail = clip(detail, 2400)
             entry.endedAt = now()
             touch()
           },

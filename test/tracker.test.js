@@ -74,7 +74,7 @@ test('state route serves live progress and health JSON', async () => {
     inject: (deps, fn) => fn({ get: name => name === 'webServer' ? { register: r => { route = r; return () => {} } } : { register: () => () => {} }, effect: fn => fn() }),
   }
   const dir = mkdtempSync(join(tmpdir(), 'cp-route-'))
-  apply(ctx, { routesFile: join(dir, 'routes.json'), stateFile: join(dir, 'modes.json') })
+  apply(ctx, { routesFile: join(dir, 'routes.json'), stateFile: join(dir, 'modes.json'), modeFile: join(dir, 'default-mode.json') })
   assert.equal(route.path, '/dsh-code-pipeline')
   let status, body
   const res = { writeHead: code => { status = code }, end: text => { body = JSON.parse(text) } }

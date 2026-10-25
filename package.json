@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-code-pipeline",
-  "version": "0.5.1",
+  "version": "0.7.1",
   "private": true,
   "type": "module",
   "description": "Staged code development with model routing, independent review and a live progress panel",
@@ -15,6 +15,7 @@
     "core.js",
     "tracker.js",
     "settings.js",
+    "history.js",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",

@@ -40,6 +40,14 @@ window.__ModuleLoader__.load({
         modelTitle: '该环节使用的模型', effortTitle: '推理等级：', currentEffort: '当前推理等级',
         noEffort: '该模型没有可调推理等级', fixedEffort: '固定',
         langTitle: '语言 / Language',
+        modeTitle: '流水线模式', modeHint: '这是全局默认；本会话可用 /pipeline 单独设置',
+        modeLabels: { off: '关闭', auto: '自动判断', always: '每次都用' },
+        modeSaved: '已应用', modeFailed: '切换失败：',
+        history: '历史', historyTitle: '历史记录', historyEmpty: '还没有历史记录。每次运行结束后会自动存一份。',
+        historyHint: '最多保留 50 条；清空只删记录，不影响运行。',
+        clearHistory: '清空记录', confirmClear: '再点一次清空', cleared: (n) => `已清空 ${n} 条`, clearFailed: '清空失败：',
+        clickDetail: '点击查看这一步的结论', loadingDetail: '加载中…', noDetail: '这一步没有可显示的文本输出。',
+        steps: n => `${n} 步`,
         pillRunning: '流水线运行中', pillIdle: text => `流水线 · ${text}`,
         roles: {
           direction: '定向', planning: '规划', design: '设计', execution: '执行', verification: '复核',
@@ -75,6 +83,14 @@ window.__ModuleLoader__.load({
         modelTitle: 'Model used by this stage', effortTitle: 'Reasoning effort: ', currentEffort: 'Current reasoning effort',
         noEffort: 'This model has no adjustable reasoning effort', fixedEffort: 'fixed',
         langTitle: 'Language / 语言',
+        modeTitle: 'Pipeline mode', modeHint: 'Global default; /pipeline overrides it per session',
+        modeLabels: { off: 'Off', auto: 'Auto', always: 'Every turn' },
+        modeSaved: 'Applied', modeFailed: 'Switch failed: ',
+        history: 'History', historyTitle: 'Run history', historyEmpty: 'No runs yet — each finished run is saved automatically.',
+        historyHint: 'Keeps the last 50 runs; clearing removes records only.',
+        clearHistory: 'Clear history', confirmClear: 'Click again to clear', cleared: n => `Cleared ${n} record${n === 1 ? '' : 's'}`, clearFailed: 'Clear failed: ',
+        clickDetail: 'Click to see what this step concluded', loadingDetail: 'Loading…', noDetail: 'This step produced no text output.',
+        steps: n => `${n} step${n === 1 ? '' : 's'}`,
         pillRunning: 'pipeline running', pillIdle: text => `pipeline · ${text}`,
         roles: {
           direction: 'Direction', planning: 'Planning', design: 'Design', execution: 'Execution', verification: 'Review',
@@ -124,9 +140,32 @@ window.__ModuleLoader__.load({
 .dcp-icon:hover{background:#f3f4f6;color:#111827}
 .dcp-icon-gear{font-size:15px}
 .dcp-lang{position:relative;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
-  border-radius:6px;color:#6b7280;cursor:pointer}
+  border-radius:6px;color:#6b7280;cursor:pointer;border:none;background:transparent}
 .dcp-lang:hover{background:#f3f4f6;color:#111827}
-.dcp-lang select{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;background:transparent}
+.dcp-langmenu{position:absolute;top:calc(100% + 4px);right:0;z-index:70;min-width:104px;padding:4px;
+  background:#ffffff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 8px 22px rgba(15,23,42,.18)}
+.dcp-langitem{display:block;width:100%;text-align:left;border:none;background:transparent;border-radius:5px;
+  padding:5px 8px;font-size:12px;color:#111827;cursor:pointer;white-space:nowrap}
+.dcp-langitem:hover{background:#eef2ff}
+.dcp-langitem.on{color:${BLUE};font-weight:600}
+.dcp-mode{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid #f0f1f3}
+.dcp-mode-label{color:#374151;font-size:11.5px;flex:none}
+.dcp-mode-slider{flex:1;min-width:0;accent-color:${BLUE};height:16px;margin:0}
+.dcp-mode-value{color:${BLUE};font-size:11.5px;font-weight:600;flex:none;min-width:60px;text-align:right}
+.dcp-row-btn{cursor:pointer;border-radius:6px}
+.dcp-row-btn:hover{background:#f8fafc}
+.dcp-row.open{background:#f8fafc}
+.dcp-caret{color:#9ca3af;font-size:10px;margin-left:2px}
+.dcp-detail{grid-column:1 / 4;margin:2px 0 4px;padding:6px 8px;border-radius:6px;background:#f3f4f6;
+  color:#374151;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+  max-height:220px;overflow:auto;user-select:text}
+.dcp-hist{display:flex;align-items:center;gap:6px;padding:5px 0;border-top:1px dashed #f0f1f3;cursor:pointer}
+.dcp-hist:first-child{border-top:none}
+.dcp-hist:hover{background:#f8fafc}
+.dcp-hist-main{flex:1;min-width:0}
+.dcp-hist-task{color:#1f2328;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dcp-hist-meta{color:#6b7280;font-size:11px;display:flex;gap:6px;flex-wrap:wrap}
+.dcp-hist-status{font-size:11px;font-weight:600;flex:none}
 .dcp-body{padding:8px 10px 6px;max-height:340px;overflow:auto}
 .dcp-task{color:#4b5563;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;user-select:text}
@@ -206,17 +245,26 @@ window.__ModuleLoader__.load({
       return h('span', { className: 'dcp-st', style: { color, fontWeight: 700 } }, ch)
     }
 
-    function PhaseRow({ phase, now, t }) {
+    function PhaseRow({ phase, now, t, open, onToggle, detail, loading }) {
       const end = phase.endedAt || now
-      return h('div', { className: 'dcp-row' },
+      const canOpen = Boolean(phase.detail || phase.hasDetail)
+      const row = h('div', {
+        className: `dcp-row${canOpen ? ' dcp-row-btn' : ''}${open ? ' open' : ''}`,
+        onClick: canOpen ? onToggle : undefined,
+        title: canOpen ? t.clickDetail : undefined,
+        role: canOpen ? 'button' : undefined,
+        'aria-expanded': canOpen ? (open ? 'true' : 'false') : undefined,
+      },
         h(StatusIcon, { status: phase.status }),
-        h('span', { className: 'dcp-step' }, t.roles[phase.role] || phase.label),
+        h('span', { className: 'dcp-step' }, t.roles[phase.role] || phase.label, canOpen ? h('span', { className: 'dcp-caret' }, open ? '▾' : '▸') : null),
         h('span', { className: 'dcp-time' }, fmt(end - phase.startedAt)),
         phase.route ? h('span', { className: 'dcp-model' }, phase.route) : null,
-        phase.note ? h('span', { className: 'dcp-note' }, phase.note) : null)
+        phase.note ? h('span', { className: 'dcp-note' }, phase.note) : null,
+        open ? h('div', { className: 'dcp-detail' }, loading ? t.loadingDetail : (detail || t.noDetail)) : null)
+      return row
     }
 
-    function RunView({ run, now, t }) {
+    function RunView({ run, now, t, openPhase, onTogglePhase, detailFor }) {
       const color = STATUS_COLORS[run.status] || '#374151'
       const label = t.status[run.status] || run.status
       const tags = [
@@ -229,7 +277,17 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dcp-task', title: run.task }, run.task || t.noTask),
         h('div', { className: 'dcp-meta' }, tags.map(tag => h('span', { key: tag, className: 'dcp-tag' }, tag))),
         run.phases.length
-          ? run.phases.map((p, i) => h(PhaseRow, { key: i, phase: p, now, t }))
+          ? run.phases.map((p, i) => {
+              const key = `${run.id}:${i}`
+              const open = openPhase === key
+              const resolved = detailFor ? detailFor(run.id, p, i) : undefined
+              return h(PhaseRow, {
+                key, phase: p, now, t, open,
+                onToggle: () => onTogglePhase && onTogglePhase(key, run.id, p),
+                detail: resolved && resolved.detail,
+                loading: open && resolved && resolved.loading,
+              })
+            })
           : h('div', { className: 'dcp-empty' }, t.preparing),
         run.status !== 'running'
           ? h('div', { className: 'dcp-result' },
@@ -351,8 +409,20 @@ window.__ModuleLoader__.load({
       const [probing, setProbing] = useState(false)
       const [clock, setClock] = useState(Date.now())
       const [view, setView] = useState('progress')
+      const [langOpen, setLangOpen] = useState(false)
+      const [modeNote, setModeNote] = useState('')
+      const [modeBusy, setModeBusy] = useState(false)
+      const [openPhase, setOpenPhase] = useState(null)
+      const [openRun, setOpenRun] = useState(null)
+      const [detailCache, setDetailCache] = useState({})   // runId -> full run (phases carry details)
+      const [clearArm, setClearArm] = useState(false)
+      const [historyNote, setHistoryNote] = useState('')
+      const langRef = useRef(null)
       const drag = useRef(null)
       const panelRef = useRef(null)
+
+      const MODE_ORDER = ['off', 'auto', 'always']
+      const mode = state && state.mode && MODE_ORDER.includes(state.mode.default) ? state.mode.default : 'auto'
 
       const runs = state ? state.runs : []
       const active = runs.filter(r => r.status === 'running')
@@ -420,7 +490,75 @@ window.__ModuleLoader__.load({
       const changeLang = next => {
         if (!LANG_IDS.includes(next)) return
         setLang(next)
+        setLangOpen(false)
         try { localStorage.setItem(LANG_KEY, next) } catch {}
+      }
+
+      // Close the language menu on any outside click or Escape, like the host's own menus.
+      useEffect(() => {
+        if (!langOpen) return undefined
+        const onDown = e => { if (!langRef.current || !langRef.current.contains(e.target)) setLangOpen(false) }
+        const onKey = e => { if (e.key === 'Escape') setLangOpen(false) }
+        document.addEventListener('mousedown', onDown, true)
+        document.addEventListener('keydown', onKey, true)
+        return () => {
+          document.removeEventListener('mousedown', onDown, true)
+          document.removeEventListener('keydown', onKey, true)
+        }
+      }, [langOpen])
+
+      // --- step details: live runs already carry them; archived runs are fetched once on demand ---
+      const loadRun = async id => {
+        if (detailCache[id]) return detailCache[id]
+        try {
+          const res = await fetch(`/dsh-code-pipeline/history?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
+          if (!res.ok) return undefined
+          const run = await res.json()
+          setDetailCache(cache => ({ ...cache, [id]: run }))
+          return run
+        } catch { return undefined }
+      }
+      const togglePhase = (key, runId, phase) => {
+        if (openPhase === key) { setOpenPhase(null); return }
+        setOpenPhase(key)
+        if (!phase.detail && phase.hasDetail) loadRun(runId)
+      }
+      const detailFor = (runId, phase) => {
+        if (phase.detail) return { detail: phase.detail }
+        const run = detailCache[runId]
+        if (!run) return phase.hasDetail ? { loading: true } : undefined
+        const idx = run.phases.findIndex(p => p.role === phase.role && p.startedAt === phase.startedAt)
+        const found = idx >= 0 ? run.phases[idx] : run.phases.find(p => p.role === phase.role)
+        return found ? { detail: found.detail } : undefined
+      }
+      const clearHistory = async () => {
+        if (!clearArm) { setClearArm(true); setHistoryNote(''); return }
+        setClearArm(false)
+        try {
+          const res = await fetch('/dsh-code-pipeline/history/clear', { method: 'POST' })
+          const body = await res.json()
+          if (!res.ok || body.ok !== true) throw new Error(String(res.status))
+          setHistoryNote(t.cleared(body.cleared || 0))
+          setDetailCache({})
+          const next = await (await fetch('/dsh-code-pipeline/state', { cache: 'no-store' })).json()
+          setState(next)
+        } catch (e) { setHistoryNote(t.clearFailed + String(e && e.message || e)) }
+      }
+
+      const changeMode = async next => {
+        if (modeBusy || !MODE_ORDER.includes(next) || next === mode) return
+        setModeBusy(true); setModeNote('')
+        try {
+          const res = await fetch('/dsh-code-pipeline/mode', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ mode: next }),
+          })
+          const body = await res.json()
+          if (!res.ok || body.ok !== true) throw new Error(body.reason || String(res.status))
+          setState(body)
+          setModeNote(t.modeSaved)
+        } catch (e) { setModeNote(t.modeFailed + String(e && e.message || e)) }
+        finally { setModeBusy(false) }
       }
 
       const onPointerDown = e => {
@@ -497,6 +635,9 @@ window.__ModuleLoader__.load({
       }
 
       const settingsOpen = view === 'settings'
+      const historyOpen = view === 'history'
+      const historyRuns = (state && state.history) || []
+      const backToProgress = () => setView('progress')
       return h(React.Fragment, null, style,
         h('div', { ref: panelRef, className: 'dcp-panel', style: pos, role: 'status', 'aria-live': 'polite' },
           h('div', {
@@ -506,38 +647,117 @@ window.__ModuleLoader__.load({
           },
             h('span', { className: 'dcp-dot', style: { background: running ? BLUE : dotColor } }),
             h('span', {
-              className: 'dcp-title', title: settingsOpen ? t.titleBack : t.titleOpen,
-              onClick: () => { if (!drag.current?.moved) setView(settingsOpen ? 'progress' : 'settings') },
-            }, settingsOpen ? t.settingsTitle : (running ? t.panelRunning : t.panelTitle)),
+              className: 'dcp-title',
+              title: settingsOpen || historyOpen ? t.titleBack : t.titleOpen,
+              onClick: () => { if (!drag.current?.moved) setView(settingsOpen || historyOpen ? 'progress' : 'settings') },
+            }, settingsOpen ? t.settingsTitle : historyOpen ? t.historyTitle : (running ? t.panelRunning : t.panelTitle)),
             h('div', {
               className: 'dcp-actions',
               // The header drags the panel; keep its pointer handling away from these controls.
               onPointerDown: e => e.stopPropagation(),
               onPointerUp: e => e.stopPropagation(),
             },
-              h('span', { className: 'dcp-lang', title: t.langTitle },
-                h(GlobeIcon),
-                h('select', {
-                  value: lang, 'aria-label': t.langTitle,
-                  onChange: e => changeLang(e.target.value),
-                }, LANGS.map(l => h('option', { key: l.id, value: l.id }, l.name)))),
+              h('div', { className: 'dcp-langwrap', ref: langRef, style: { position: 'relative', display: 'inline-flex' } },
+                h('button', {
+                  type: 'button', className: 'dcp-lang', title: t.langTitle,
+                  'aria-haspopup': 'menu', 'aria-expanded': langOpen ? 'true' : 'false',
+                  onClick: () => setLangOpen(v => !v),
+                }, h(GlobeIcon)),
+                langOpen
+                  ? h('div', { className: 'dcp-langmenu', role: 'menu' },
+                      LANGS.map(l => h('button', {
+                        key: l.id, type: 'button', role: 'menuitemradio',
+                        'aria-checked': l.id === lang ? 'true' : 'false',
+                        className: `dcp-langitem${l.id === lang ? ' on' : ''}`,
+                        onClick: () => changeLang(l.id),
+                      }, l.name)))
+                  : null),
               h('button', {
                 type: 'button', className: 'dcp-icon dcp-icon-gear',
                 title: settingsOpen ? t.titleBack : t.settingsTitle,
                 onClick: () => setView(settingsOpen ? 'progress' : 'settings'),
               }, settingsOpen ? '\u21a9' : '\u2699'),
+              h('button', {
+                type: 'button', className: 'dcp-icon',
+                title: historyOpen ? t.titleBack : t.historyTitle,
+                'aria-label': t.historyTitle,
+                onClick: () => setView(historyOpen ? 'progress' : 'history'),
+              }, '\u2630'),
               h('button', { type: 'button', className: 'dcp-icon', title: t.collapse, onClick: () => update({ collapsed: true }) }, '–'),
               h('button', { type: 'button', className: 'dcp-icon', title: t.close, onClick: () => setHiddenUntilRun(newestId || '__none__') }, '×'))),
           settingsOpen
-            ? h(SettingsView, { onClose: () => setView('progress'), t })
-            : h(React.Fragment, null,
+            ? h(SettingsView, { onClose: backToProgress, t })
+            : historyOpen
+              ? h(React.Fragment, null,
+                  h('div', { className: 'dcp-body' },
+                    historyRuns.length
+                      ? historyRuns.map(run => {
+                          const expanded = openRun === run.id
+                          const color = STATUS_COLORS[run.status] || '#374151'
+                          return h('div', { key: run.id },
+                            h('div', {
+                              className: 'dcp-hist',
+                              onClick: () => {
+                                setOpenRun(expanded ? null : run.id)
+                                setOpenPhase(null)
+                                if (!expanded) loadRun(run.id)
+                              },
+                            },
+                              h('span', { className: 'dcp-hist-status', style: { color } }, t.status[run.status] || run.status),
+                              h('div', { className: 'dcp-hist-main' },
+                                h('div', { className: 'dcp-hist-task', title: run.task }, run.task || t.noTask),
+                                h('div', { className: 'dcp-hist-meta' },
+                                  h('span', null, new Date(run.startedAt).toLocaleString()),
+                                  h('span', null, t.steps(run.phases.length)),
+                                  run.summary ? h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, run.summary) : null))),
+                            expanded
+                              ? h('div', { style: { padding: '2px 0 6px' } },
+                                  h(RunView, {
+                                    run: detailCache[run.id] || run, now, t,
+                                    openPhase: openPhase && openPhase.startsWith(`${run.id}:`) ? openPhase : null,
+                                    onTogglePhase: togglePhase,
+                                    detailFor,
+                                  }))
+                              : null)
+                        })
+                      : h('div', { className: 'dcp-empty' }, t.historyEmpty),
+                    historyNote ? h('div', { style: { color: '#6b7280', fontSize: '11px', marginTop: 6 } }, historyNote) : null),
+                  h('div', { className: 'dcp-save' },
+                    h('span', { className: 'dcp-save-msg' }, t.historyHint),
+                    h('button', { type: 'button', className: 'dcp-btn', onClick: backToProgress }, t.back),
+                    h('button', {
+                      type: 'button', className: 'dcp-primary',
+                      style: clearArm ? { background: '#b91c1c', borderColor: '#b91c1c' } : undefined,
+                      onClick: clearHistory, disabled: !historyRuns.length,
+                    }, clearArm ? t.confirmClear : t.clearHistory)))
+              : h(React.Fragment, null,
                 h('div', { className: 'dcp-body' },
                   shown.length
-                    ? shown.map(r => h(RunView, { key: r.id, run: r, now, t }))
+                    ? shown.map(r => h(RunView, {
+                        key: r.id, run: r, now, t,
+                        openPhase: openPhase && openPhase.startsWith(`${r.id}:`) ? openPhase : null,
+                        onTogglePhase: togglePhase, detailFor,
+                      }))
                     : h('div', { className: 'dcp-empty' }, t.idle)),
+                h('div', { className: 'dcp-mode', title: t.modeHint },
+                  h('span', { className: 'dcp-mode-label' }, t.modeTitle),
+                  h('input', {
+                    className: 'dcp-mode-slider', type: 'range', min: 0, max: 2, step: 1,
+                    value: MODE_ORDER.indexOf(mode), disabled: modeBusy,
+                    'aria-label': t.modeTitle,
+                    onChange: e => changeMode(MODE_ORDER[Number(e.target.value)]),
+                  }),
+                  h('span', { className: 'dcp-mode-value' }, t.modeLabels[mode] || mode),
+                  modeNote
+                    ? h('span', { style: { color: '#6b7280', fontSize: '11px', flex: 'none' } }, modeNote)
+                    : null),
                 h('div', { className: 'dcp-foot', onClick: () => setShowIssues(v => !v), title: t.details },
                   h('span', { className: 'dcp-dot', style: { background: dotColor } }),
                   h('span', { className: 'dcp-foot-text' }, t.health + healthText),
+                  h('button', {
+                    type: 'button', className: 'dcp-btn', title: t.historyTitle,
+                    onClick: e => { e.stopPropagation(); setView('history') },
+                  }, `${t.history}${historyRuns.length ? ` (${historyRuns.length})` : ''}`),
                   h('button', { type: 'button', className: 'dcp-btn', onClick: e => { e.stopPropagation(); probe() }, disabled: probing }, probing ? t.checking : t.recheck)),
                 showIssues
                   ? h('ul', { className: 'dcp-issues' },

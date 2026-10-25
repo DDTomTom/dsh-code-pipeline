@@ -26,7 +26,7 @@ test('missing execution API credential is reported without claiming success', as
   }
   try {
     apply(ctx, {
-      routesFile: join(dir, 'routes.json'), stateFile: join(dir, 'modes.json'),
+      routesFile: join(dir, 'routes.json'), stateFile: join(dir, 'modes.json'), modeFile: join(dir, 'default-mode.json'),
       routes: { execution: { provider: 'deepseek-official', model: 'deepseek-flash' } },
     })
     const result = await tool.execute({ task: 'Fix parser', mode: 'simple' }, { agent: owner, signal: new AbortController().signal })
