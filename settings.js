@@ -3,8 +3,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { ROLE_LABELS } from './tracker.js'
 
-/** Stages shown top-to-bottom in the panel's settings view, in execution order. */
-export const STAGE_ROLES = ['direction', 'planning', 'design', 'execution', 'verification', 'deepReview', 'emergencyFable', 'emergencyAstra']
+/** Stages shown top-to-bottom in the panel's settings view; summarize runs on demand, not per pipeline. */
+export const STAGE_ROLES = ['direction', 'planning', 'design', 'execution', 'verification', 'deepReview', 'emergencyFable', 'emergencyAstra', 'summarize']
 
 export const roleLabel = role => ROLE_LABELS[role] || role
 

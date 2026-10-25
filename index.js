@@ -237,6 +237,44 @@ export function apply(ctx, config = {}) {
     routeCheckedAt = 0
     return { ok: true, settings: await settingsView() }
   }
+  // ---- plain-language summary of one run (panel button) ----------------------------
+  const summarizeRun = async run => {
+    const route = routes.summarize || routes.direction
+    if (!route?.provider || !route?.model) throw new Error('summarize route is not configured')
+    const model = await resolveRoute(ctx.llm, 'summarize', route, pluginAbort.signal)
+    const steps = run.phases.map(p => `- ${roleLabel(p.role)}：${p.status}${p.note ? `（${p.note}）` : ''}`).join('\n')
+    const details = run.phases.filter(p => p.detail)
+      .map(p => `【${roleLabel(p.role)}】\n${p.detail}`).join('\n\n').slice(0, 4000)
+    const prompt = [
+      '把这次代码任务翻译成大白话，读者完全不懂编程。要求：',
+      '1. 两三句话，最多 120 个汉字；',
+      '2. 先说结果（做好了 / 没做好），没做好就说卡在哪、需要人做什么；',
+      '3. 不要出现模型名、文件名、命令、英文单词、括号注释；',
+      '4. 不要客套话，不要分点，直接说人话。',
+      '',
+      `任务：${run.task}`,
+      `结论：${run.status}`,
+      run.summary ? `备注：${run.summary}` : '',
+      `步骤：\n${steps}`,
+      details ? `供你理解的细节：\n${details}` : '',
+    ].filter(Boolean).join('\n')
+    const chunks = ctx.llm.stream({
+      provider: route.provider, model,
+      ...(route.effort ? { reasoningEffort: route.effort } : {}),
+      system: '你负责把技术结果讲给不懂电脑的人听，只说人话。',
+      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+      signal: pluginAbort.signal,
+    })
+    let out = ''
+    for await (const chunk of chunks) {
+      if (chunk.type === 'text-delta') out += chunk.text
+      else if (chunk.type === 'finish' && chunk.reason?.kind === 'error') throw new Error(chunk.reason.failure?.message || 'summary failed')
+    }
+    const text = out.trim()
+    if (!text) throw new Error('the summarize model returned no text')
+    return text
+  }
+
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], webCtx => {
       const webServer = typeof webCtx.get === 'function' ? webCtx.get('webServer') : webCtx.webServer
@@ -259,6 +297,17 @@ export function apply(ctx, config = {}) {
               defaultMode.set(body.mode)
               return json(200, { ok: true, ...stateView() })
             } catch (error) { return json(400, { ok: false, reason: String(error?.message || error).slice(0, 200) }) }
+          }
+          if (pathname === '/dsh-code-pipeline/summarize' && req.method === 'POST') {
+            try {
+              const body = await readJsonBody(req)
+              const run = body?.runId ? history.get(String(body.runId)) : tracker.snapshot().runs[0]
+              if (!run) return json(404, { ok: false, reason: 'no run to summarize' })
+              const text = await summarizeRun(run)
+              return json(200, { ok: true, runId: run.id, text })
+            } catch (error) {
+              return json(400, { ok: false, reason: String(error?.message || error).slice(0, 240) })
+            }
           }
           if (pathname === '/dsh-code-pipeline/history' && req.method === 'GET') {
             const id = new URL(String(req.url || '/'), 'http://local').searchParams.get('id')

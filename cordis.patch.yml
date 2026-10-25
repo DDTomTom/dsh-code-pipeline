@@ -14,3 +14,4 @@
           deepReview: { provider: anthropic, model: latest-opus }
           emergencyFable: { provider: anthropic, model: latest-fable }
           emergencyAstra: { provider: openai, model: gpt-6-astra }
+          summarize: { provider: deepseek-account, model: deepseek-flash }

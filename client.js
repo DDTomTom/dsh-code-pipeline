@@ -44,6 +44,7 @@ window.__ModuleLoader__.load({
         modeLabels: { off: '关闭', auto: '自动判断', always: '每次都用' },
         modeSaved: '已应用', modeFailed: '切换失败：',
         history: '历史', historyTitle: '历史记录', historyEmpty: '还没有历史记录。每次运行结束后会自动存一份。',
+        summarize: '总结', summarizing: '正在总结…', summaryTitle: '白话总结', summarizeFailed: '总结失败：', backToTop: '回到顶部',
         historyHint: '最多保留 50 条；清空只删记录，不影响运行。',
         clearHistory: '清空记录', confirmClear: '再点一次清空', cleared: (n) => `已清空 ${n} 条`, clearFailed: '清空失败：',
         clickDetail: '点击查看这一步的结论', loadingDetail: '加载中…', noDetail: '这一步没有可显示的文本输出。',
@@ -52,7 +53,7 @@ window.__ModuleLoader__.load({
         roles: {
           direction: '定向', planning: '规划', design: '设计', execution: '执行', verification: '复核',
           deepReview: '深度复核', emergencyFable: 'Fable 诊断', emergencyAstra: 'Astra 诊断',
-          facts: '采集仓库事实', check: '独立检查',
+          facts: '采集仓库事实', check: '独立检查', summarize: '总结',
         },
         status: {
           running: '运行中', reviewed_with_check: '已通过 · 含机器检查', reviewed_unverified: '已复核 · 未经机器验证',
@@ -87,6 +88,7 @@ window.__ModuleLoader__.load({
         modeLabels: { off: 'Off', auto: 'Auto', always: 'Every turn' },
         modeSaved: 'Applied', modeFailed: 'Switch failed: ',
         history: 'History', historyTitle: 'Run history', historyEmpty: 'No runs yet — each finished run is saved automatically.',
+        summarize: 'Summary', summarizing: 'Summarizing…', summaryTitle: 'Plain-language summary', summarizeFailed: 'Summary failed: ', backToTop: 'Back to top',
         historyHint: 'Keeps the last 50 runs; clearing removes records only.',
         clearHistory: 'Clear history', confirmClear: 'Click again to clear', cleared: n => `Cleared ${n} record${n === 1 ? '' : 's'}`, clearFailed: 'Clear failed: ',
         clickDetail: 'Click to see what this step concluded', loadingDetail: 'Loading…', noDetail: 'This step produced no text output.',
@@ -95,7 +97,7 @@ window.__ModuleLoader__.load({
         roles: {
           direction: 'Direction', planning: 'Planning', design: 'Design', execution: 'Execution', verification: 'Review',
           deepReview: 'Deep review', emergencyFable: 'Fable diagnosis', emergencyAstra: 'Astra diagnosis',
-          facts: 'Workspace facts', check: 'Independent check',
+          facts: 'Workspace facts', check: 'Independent check', summarize: 'Summary',
         },
         status: {
           running: 'running', reviewed_with_check: 'passed · machine-checked', reviewed_unverified: 'reviewed · not machine-verified',
@@ -157,8 +159,13 @@ window.__ModuleLoader__.load({
 .dcp-row.open{background:#f8fafc}
 .dcp-caret{color:#9ca3af;font-size:10px;margin-left:2px}
 .dcp-detail{grid-column:1 / 4;margin:2px 0 4px;padding:6px 8px;border-radius:6px;background:#f3f4f6;
-  color:#374151;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
-  max-height:220px;overflow:auto;user-select:text}
+  color:#374151;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;user-select:text}
+.dcp-summary{margin:6px 0 2px;padding:7px 9px;border-radius:8px;background:#eef2ff;border:1px solid #dbeafe;
+  color:#1f2328;font-size:12px;line-height:1.6;white-space:pre-wrap;user-select:text}
+.dcp-summary b{color:${BLUE};display:block;font-size:11.5px;margin-bottom:2px}
+.dcp-body{position:relative;overscroll-behavior:contain;scrollbar-gutter:stable}
+.dcp-top{position:sticky;top:0;float:right;z-index:2;margin:-2px 0 2px 4px;border:1px solid #d1d5db;
+  background:#ffffff;color:#374151;border-radius:999px;font-size:11px;padding:1px 8px;cursor:pointer}
 .dcp-hist{display:flex;align-items:center;gap:6px;padding:5px 0;border-top:1px dashed #f0f1f3;cursor:pointer}
 .dcp-hist:first-child{border-top:none}
 .dcp-hist:hover{background:#f8fafc}
@@ -417,6 +424,10 @@ window.__ModuleLoader__.load({
       const [detailCache, setDetailCache] = useState({})   // runId -> full run (phases carry details)
       const [clearArm, setClearArm] = useState(false)
       const [historyNote, setHistoryNote] = useState('')
+      const [summaries, setSummaries] = useState({})
+      const [summarizing, setSummarizing] = useState(null)
+      const [scrolled, setScrolled] = useState(false)
+      const bodyRef = useRef(null)
       const langRef = useRef(null)
       const drag = useRef(null)
       const panelRef = useRef(null)
@@ -543,6 +554,24 @@ window.__ModuleLoader__.load({
           const next = await (await fetch('/dsh-code-pipeline/state', { cache: 'no-store' })).json()
           setState(next)
         } catch (e) { setHistoryNote(t.clearFailed + String(e && e.message || e)) }
+      }
+
+      // One plain-language summary per run, cached for the life of the panel.
+      const summarize = async runId => {
+        const key = runId || (runs[0] && runs[0].id)
+        if (!key || summarizing) return
+        setSummarizing(key)
+        try {
+          const res = await fetch('/dsh-code-pipeline/summarize', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ runId: key }),
+          })
+          const body = await res.json()
+          if (!res.ok || body.ok !== true) throw new Error(body.reason || String(res.status))
+          setSummaries(all => ({ ...all, [key]: body.text }))
+        } catch (e) {
+          setSummaries(all => ({ ...all, [key]: `${t.summarizeFailed}${String(e && e.message || e)}`, __error: true }))
+        } finally { setSummarizing(null) }
       }
 
       const changeMode = async next => {
@@ -717,7 +746,16 @@ window.__ModuleLoader__.load({
                                     openPhase: openPhase && openPhase.startsWith(`${run.id}:`) ? openPhase : null,
                                     onTogglePhase: togglePhase,
                                     detailFor,
-                                  }))
+                                  }),
+                                  h('div', { style: { padding: '0 0 4px' } },
+                                    h('button', {
+                                      type: 'button', className: 'dcp-btn',
+                                      disabled: Boolean(summarizing),
+                                      onClick: e => { e.stopPropagation(); summarize(run.id) },
+                                    }, summarizing === run.id ? t.summarizing : t.summarize)),
+                                  summaries[run.id]
+                                    ? h('div', { className: 'dcp-summary' }, h('b', null, t.summaryTitle), summaries[run.id])
+                                    : null)
                               : null)
                         })
                       : h('div', { className: 'dcp-empty' }, t.historyEmpty),
@@ -731,13 +769,27 @@ window.__ModuleLoader__.load({
                       onClick: clearHistory, disabled: !historyRuns.length,
                     }, clearArm ? t.confirmClear : t.clearHistory)))
               : h(React.Fragment, null,
-                h('div', { className: 'dcp-body' },
+                h('div', {
+                  className: 'dcp-body', ref: bodyRef,
+                  onScroll: e => setScrolled(e.currentTarget.scrollTop > 20),
+                },
+                  scrolled
+                    ? h('button', {
+                        type: 'button', className: 'dcp-top',
+                        onClick: () => { if (bodyRef.current) bodyRef.current.scrollTop = 0; setScrolled(false) },
+                      }, '\u2191 ' + t.backToTop)
+                    : null,
                   shown.length
-                    ? shown.map(r => h(RunView, {
-                        key: r.id, run: r, now, t,
-                        openPhase: openPhase && openPhase.startsWith(`${r.id}:`) ? openPhase : null,
-                        onTogglePhase: togglePhase, detailFor,
-                      }))
+                    ? shown.map(r => h(React.Fragment, { key: r.id },
+                        h(RunView, {
+                          run: r, now, t,
+                          openPhase: openPhase && openPhase.startsWith(`${r.id}:`) ? openPhase : null,
+                          onTogglePhase: togglePhase, detailFor,
+                        }),
+                        summaries[r.id]
+                          ? h('div', { className: 'dcp-summary', style: summaries.__error ? { background: '#fef2f2', borderColor: '#fecaca' } : undefined },
+                              h('b', null, t.summaryTitle), summaries[r.id])
+                          : null))
                     : h('div', { className: 'dcp-empty' }, t.idle)),
                 h('div', { className: 'dcp-mode', title: t.modeHint },
                   h('span', { className: 'dcp-mode-label' }, t.modeTitle),
@@ -754,6 +806,11 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'dcp-foot', onClick: () => setShowIssues(v => !v), title: t.details },
                   h('span', { className: 'dcp-dot', style: { background: dotColor } }),
                   h('span', { className: 'dcp-foot-text' }, t.health + healthText),
+                  h('button', {
+                    type: 'button', className: 'dcp-btn', title: t.summaryTitle,
+                    disabled: !runs.length || Boolean(summarizing),
+                    onClick: e => { e.stopPropagation(); summarize(runs[0] && runs[0].id) },
+                  }, summarizing ? t.summarizing : t.summarize),
                   h('button', {
                     type: 'button', className: 'dcp-btn', title: t.historyTitle,
                     onClick: e => { e.stopPropagation(); setView('history') },

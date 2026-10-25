@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { applyRoutePatch, loadRouteOverrides, mergeRoutes, saveRouteOverrides, STAGE_ROLES } from '../settings.js'
+import { applyRoutePatch, loadRouteOverrides, mergeRoutes, roleLabel, saveRouteOverrides, STAGE_ROLES } from '../settings.js'
 
 const base = {
   direction: { provider: 'openai', model: 'gpt-6-sol' },
@@ -55,5 +55,7 @@ test('a patch installs only combinations the catalog actually advertises', () =>
 })
 
 test('every stage the panel lists is a role the pipeline knows', () => {
-  assert.deepEqual(STAGE_ROLES, ['direction', 'planning', 'design', 'execution', 'verification', 'deepReview', 'emergencyFable', 'emergencyAstra'])
+  assert.deepEqual(STAGE_ROLES, ['direction', 'planning', 'design', 'execution', 'verification', 'deepReview', 'emergencyFable', 'emergencyAstra', 'summarize'])
+  for (const role of STAGE_ROLES) assert.equal(typeof roleLabel(role), 'string')
+  assert.equal(roleLabel('summarize'), '总结')
 })

@@ -13,6 +13,7 @@ export const ROLE_LABELS = {
   emergencyAstra: 'Astra 诊断',
   facts: '采集仓库事实',
   check: '独立检查',
+  summarize: '总结',
 }
 
 const MAX_RUNS = 6
