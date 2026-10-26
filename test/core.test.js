@@ -49,23 +49,23 @@ test('one failed review permits only one local repair', async () => {
 test('non-completed child halts instead of claiming success', async () => {
   await assert.rejects(runPipeline({ task: 'Fix parser', mode: 'simple' }, async () => ({ stopReason: 'error' })), /did not complete/)
 })
-test('exceptional fable diagnosis runs only after normal bounded repair fails', async () => {
+test('the single diagnostics stage runs only after normal bounded repair fails', async () => {
   const roles = []
   let reviews = 0
-  const result = await runPipeline({ task: 'Fix parser', mode: 'simple', escalation: 'fable' }, async role => {
+  const result = await runPipeline({ task: 'Fix parser', mode: 'simple', escalation: 'diagnose' }, async role => {
     roles.push(role)
-    return { sessionId: role + roles.length, stopReason: 'completed', output: role === 'emergencyFable' ? 'Diagnose parser edge case' : 'report', structured: role === 'verification' ? { passed: ++reviews === 3, evidence: ['read file'], findings: ['edge case'] } : undefined }
+    return { sessionId: role + roles.length, stopReason: 'completed', output: role === 'diagnostics' ? 'Diagnose parser edge case' : 'report', structured: role === 'verification' ? { passed: ++reviews === 3, evidence: ['read file'], findings: ['edge case'] } : undefined }
   }, async () => ({ passed: true, checks: ['unit tests exited 0'] }))
   assert.equal(result.status, 'reviewed_with_check')
-  assert.deepEqual(roles, ['execution', 'verification', 'execution', 'verification', 'emergencyFable', 'execution', 'verification'])
+  assert.deepEqual(roles, ['execution', 'verification', 'execution', 'verification', 'diagnostics', 'execution', 'verification'])
 })
-test('missing emergency model leaves normal failure unchanged', async () => {
-  const result = await runPipeline({ task: 'Fix parser', mode: 'simple', maxRepairs: 0, escalation: 'astra' }, async role => {
-    if (role === 'emergencyAstra') throw new Error('no astra model in catalog')
+test('missing diagnostics model leaves normal failure unchanged', async () => {
+  const result = await runPipeline({ task: 'Fix parser', mode: 'simple', maxRepairs: 0, escalation: 'diagnose' }, async role => {
+    if (role === 'diagnostics') throw new Error('no diagnosis model in catalog')
     return { sessionId: role, stopReason: 'completed', output: 'report', structured: role === 'verification' ? { passed: false, evidence: ['read file'], findings: ['test failed'] } : undefined }
   })
   assert.equal(result.status, 'not_verified')
-  assert.match(result.next, /no astra model/)
+  assert.match(result.next, /no diagnosis model/)
 })
 test('failed explicit test command triggers one bounded repair', async () => {
   const roles = []
@@ -97,9 +97,9 @@ test('orchestrator workspace facts reach the reviewer; collector failure is not 
   assert.equal(r.status, 'reviewed_unverified')
   assert.doesNotMatch(prompts.verification, /总控在执行后/)
 })
-test('successful normal path never invokes an emergency route', async () => {
+test('successful normal path never invokes the diagnostics route', async () => {
   const roles = []
-  await runPipeline({ task: 'Fix parser', mode: 'simple', escalation: 'astra' }, async role => {
+  await runPipeline({ task: 'Fix parser', mode: 'simple', escalation: 'diagnose' }, async role => {
     roles.push(role)
     return { sessionId: role, stopReason: 'completed', output: 'report', structured: role === 'verification' ? { passed: true, evidence: ['read file'], findings: [] } : undefined }
   })

@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path'
 import { runPipeline } from './core.js'
 import { assessHealth, createTracker } from './tracker.js'
 import { createHistoryStore, historyDigest } from './history.js'
-import { applyRoutePatch, loadRouteOverrides, mergeRoutes, roleLabel, saveRouteOverrides, STAGE_ROLES } from './settings.js'
+import { applyRoutePatch, loadRouteOverrides, mergeAllRoutes, mergeRoutes, roleLabel, saveRouteOverrides, STAGE_ROLES } from './settings.js'
+import { createLiveBuffer, liveSnapshot, reduceLive, resetLive } from './live.js'
 
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
 const MAX_SESSION_MODES = 500
@@ -103,9 +104,15 @@ export function reviewObserved(events) {
 export function apply(ctx, config = {}) {
   const baseRoutes = config.routes || {}
   const routesFile = config.routesFile || join(DSH_HOME, 'code-pipeline', 'routes.json')
-  let overrides = loadRouteOverrides(routesFile)
-  let routes = mergeRoutes(baseRoutes, overrides)
+  let routeState = loadRouteOverrides(routesFile)
+  let routes = mergeRoutes(baseRoutes, routeState.routes, routeState.disabled)
   const backend = config.backend || 'spawn'
+  // A run keeps working while it waits for the user's answer, so the tool itself only carries a
+  // hard stop far beyond the interactive limits; the real pacing lives in the run's own gate.
+  const firstMinutes = Number.isFinite(Number(config.timeoutMinutes)) && Number(config.timeoutMinutes) > 0 ? Number(config.timeoutMinutes) : 20
+  const nextMinutes = Number.isFinite(Number(config.nextTimeoutMinutes)) && Number(config.nextTimeoutMinutes) > 0 ? Number(config.nextTimeoutMinutes) : 120
+  const askWindowMs = Number.isFinite(Number(config.askWindowMinutes)) && Number(config.askWindowMinutes) > 0 ? Number(config.askWindowMinutes) * 60000 : 180000
+  const toolTimeoutMs = Math.round((firstMinutes + nextMinutes * 4 + 20) * 60000)
   // config.startMode has always meant "what a fresh session does"; a manual default becomes 'auto + pending start'.
   const startMode = config.startMode === 'manual' ? 'manual' : 'auto'
   const modeStore = createModeStore(config.stateFile || join(DSH_HOME, 'code-pipeline', 'session-modes.json'))
@@ -120,6 +127,22 @@ export function apply(ctx, config = {}) {
 
   // ---- live progress + health for the floating panel ------------------------------
   const tracker = createTracker()
+  /** runId → { stop(), resume(), isStopped() }: the panel's 终止 / 继续 buttons drive a run. */
+  const runControls = new Map()
+  // childId -> { ph, buf, lastPush }: the running phase's assistant stream, throttled for the panel.
+  const liveChildren = new Map()
+  ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+    const entry = liveChildren.get(String(agent?.id ?? ''))
+    if (!entry) return
+    if (frame?.type === 'start') { resetLive(entry.buf); return }
+    if (frame?.type !== 'chunk') return
+    if (!reduceLive(entry.buf, frame.chunk)) return
+    const at = Date.now()
+    // Thinking text arrives token by token; the panel polls once a second, so 250ms is plenty.
+    if (entry.buf.kind !== 'tool' && at - entry.lastPush < 250) return
+    entry.lastPush = at
+    entry.ph.live(liveSnapshot(entry.buf))
+  })
   const history = createHistoryStore(config.historyFile || join(DSH_HOME, 'code-pipeline', 'history.json'))
   let routeChecks = []
   let routeCheckedAt = 0
@@ -145,6 +168,7 @@ export function apply(ctx, config = {}) {
     health: healthView(),
     mode: { default: defaultMode.get() },
     history: historyDigest(history.list()),
+    limits: { firstMinutes, nextMinutes, askWindowMs },
   })
   if (typeof ctx.inject === 'function') {
     // First probe shortly after load, then every 10 minutes; probes resolve catalogs only (no model calls).
@@ -184,9 +208,11 @@ export function apply(ctx, config = {}) {
   }
   const settingsView = async () => {
     const cat = await loadCatalog()
+    const configured = mergeAllRoutes(baseRoutes, routeState.routes)
+    const off = new Set(routeState.disabled)
     const roles = []
     for (const role of STAGE_ROLES) {
-      const route = routes[role]
+      const route = configured[role]
       if (!route) continue
       let model = route.model
       if (['latest-opus', 'latest-fable', 'latest-astra'].includes(model)) {
@@ -198,11 +224,12 @@ export function apply(ctx, config = {}) {
       const efforts = await effortsOf(route.provider, model)
       roles.push({
         role, label: roleLabel(role), provider: route.provider, model,
+        enabled: !off.has(role),
         effort: route.effort || '', efforts: [...efforts],
         defaultEffort: efforts.default || '',
       })
     }
-    return { roles, providers: cat.providers, models: cat.models }
+    return { roles, providers: cat.providers, models: cat.models, limits: { firstMinutes, nextMinutes, askWindowMs } }
   }
   const readJsonBody = async req => {
     const chunks = []
@@ -216,24 +243,21 @@ export function apply(ctx, config = {}) {
     const providers = cat.providers.map(p => p.id)
     const patch = Array.isArray(body?.routes) ? body.routes : []
     const checked = applyRoutePatch({
-      patch, routes, providers,
+      patch, routes: routeState.routes, disabled: routeState.disabled, providers,
       modelsOf: provider => (cat.models[provider] || []).map(m => m.id),
       // Effort strings are validated below with the async capability lookup.
     })
     if (!checked.ok) return { ok: false, reason: checked.reason }
-    const applied = {}
     for (const item of patch) {
-      const role = String(item.role)
+      if (item?.enabled === false) continue
       const effort = item.effort ? String(item.effort) : ''
-      if (effort) {
-        const supported = await effortsOf(String(item.provider), String(item.model))
-        if (!supported.some(e => e.id === effort)) return { ok: false, reason: `${item.model} 不支持推理等级 ${effort}` }
-      }
-      applied[role] = { provider: String(item.provider), model: String(item.model), ...(effort ? { effort } : {}) }
+      if (!effort) continue
+      const supported = await effortsOf(String(item.provider), String(item.model))
+      if (!supported.some(e => e.id === effort)) return { ok: false, reason: `${item.model} 不支持推理等级 ${effort}` }
     }
-    overrides = { ...overrides, ...applied }
-    saveRouteOverrides(routesFile, overrides)
-    routes = mergeRoutes(baseRoutes, overrides)
+    routeState = { routes: checked.routes, disabled: checked.disabled }
+    saveRouteOverrides(routesFile, routeState)
+    routes = mergeRoutes(baseRoutes, routeState.routes, routeState.disabled)
     routeCheckedAt = 0
     return { ok: true, settings: await settingsView() }
   }
@@ -321,6 +345,19 @@ export function apply(ctx, config = {}) {
             const before = history.size
             history.clear()
             return json(200, { ok: true, cleared: before })
+          }
+          if ((pathname === '/dsh-code-pipeline/stop' || pathname === '/dsh-code-pipeline/continue') && req.method === 'POST') {
+            let body = {}
+            try { body = await readJsonBody(req) } catch { body = {} }
+            const run = body?.runId
+              ? tracker.snapshot().runs.find(r => r.id === String(body.runId))
+              : tracker.snapshot().runs.find(r => r.status === 'running' || r.status === 'waiting')
+            if (!run) return json(404, { ok: false, reason: 'no active run' })
+            const control = runControls.get(run.id)
+            if (!control) return json(409, { ok: false, reason: 'run is not controllable anymore' })
+            if (pathname.endsWith('/stop')) control.stop()
+            else control.resume('continue')
+            return json(200, { ok: true, runId: run.id, ...stateView() })
           }
           if (pathname === '/dsh-code-pipeline/settings' && req.method === 'GET') {
             try { return json(200, await settingsView()) }
@@ -424,11 +461,11 @@ export function apply(ctx, config = {}) {
         mode: { type: 'string', enum: ['auto', 'simple', 'complex'], description: 'auto lets Sol classify; simple skips expensive direction/planning; complex forces Opus planning. Default auto.' },
         checkCommand: { type: 'string', enum: ['node --test', 'npm test', 'pnpm test', 'pytest', 'cargo test', 'go test ./...'], description: 'Optional independent test command; set only when the user explicitly wrote this exact command in the original task. It runs under the same permission policy.' },
         checkWorkdir: { type: 'string', description: 'Optional test directory, only if its path occurs in the original task; otherwise the current session directory is used.' },
-        escalation: { type: 'string', enum: ['none', 'fable', 'astra'], description: 'Exceptional read-only diagnosis after normal repair fails, then one final DeepSeek repair and independent review. Default none; set fable/astra only when the user explicitly asks.' },
+        escalation: { type: 'string', enum: ['none', 'diagnose', 'fable', 'astra'], description: 'Exceptional read-only diagnosis (the panel\'s 诊断 stage, any model you pick there) after normal repair fails, then one final repair and independent review. Default none; fable/astra are accepted as legacy aliases for diagnose.' },
       },
       required: ['task'],
     },
-    timeoutMs: 1200000,
+    ...(toolTimeoutMs ? { timeoutMs: toolTimeoutMs } : {}),
     output: {
       schema: { type: 'object', properties: {}, additionalProperties: true },
       render: (_args, value) => text(value),
@@ -443,6 +480,59 @@ export function apply(ctx, config = {}) {
       if (!ctx.subagents.getProvider(backend)) return { status: 'unavailable', reason: `subagent backend ${backend} is absent` }
       const signal = AbortSignal.any([exec.signal, pluginAbort.signal])
       const run = tracker.startRun({ sessionId: parent.id, task: args.task, mode: args.mode, escalation: args.escalation })
+      // ---- time limits: ask, extend, or stop -------------------------------------
+      // 20 minutes, then a prompt; answer or 3 minutes of silence continues for 120 minutes; a
+      // second prompt, same silence rule; after that the run is no longer asked again.
+      const stopController = new AbortController()
+      const runSignal = AbortSignal.any([signal, stopController.signal])
+      const control = {
+        stopped: false,
+        resume: null,
+        stop() {
+          control.stopped = true
+          const wake = control.resume
+          control.resume = null
+          try { stopController.abort() } catch { /* already aborted */ }
+          if (wake) wake('stop')
+        },
+        answer() {
+          const wake = control.resume
+          control.resume = null
+          if (wake) wake('continue')
+        },
+      }
+      runControls.set(run.id, control)
+      let deadline = Date.now() + firstMinutes * 60000
+      let asked = 0
+      const askToContinue = async (reason) => {
+        if (control.stopped) return
+        if (asked >= 2 || Date.now() < deadline) return
+        asked++
+        const segment = asked === 1 ? firstMinutes : nextMinutes
+        const nextSegment = asked === 1 ? nextMinutes : 0
+        const until = Date.now() + askWindowMs
+        run.waiting({ minutes: segment, nextMinutes: nextSegment, deadlineAt: until, note: reason })
+        const answer = await new Promise(resolve => {
+          let settled = false
+          const done = value => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            control.resume = null
+            resolve(value)
+          }
+          const timer = setTimeout(() => done('continue'), Math.max(0, until - Date.now()))
+          control.resume = done
+        })
+        run.resume(answer)
+        if (answer === 'stop' || control.stopped) return
+        deadline = nextSegment > 0 ? Date.now() + nextSegment * 60000 : Number.POSITIVE_INFINITY
+      }
+      const gate = async (reason) => {
+        if (control.stopped) throw Object.assign(new Error('用户已终止本次运行'), { code: 'STOPPED' })
+        await askToContinue(reason)
+        if (control.stopped) throw Object.assign(new Error('用户已终止本次运行'), { code: 'STOPPED' })
+      }
       // What a phase concluded, so the panel can show it when the user clicks that step.
       const summarize = r => {
         const parts = []
@@ -458,12 +548,13 @@ export function apply(ctx, config = {}) {
         return parts.join('\n\n')
       }
       const call = async (role, prompt, outputSchema) => {
+        await gate(roleLabel(role))
         const route = routes[role]
         const ph = run.phase(role, route ? `${route.provider}/${route.model}` : '未配置')
         try {
-          const model = await resolveRoute(ctx.llm, role, route, signal)
+          const model = await resolveRoute(ctx.llm, role, route, runSignal)
           ph.route(`${route.provider}/${model}`)
-          const r = await callResolved(role, route, model, prompt, outputSchema)
+          const r = await callResolved(role, route, model, prompt, outputSchema, ph)
           if (r.stopReason !== 'completed') ph.end('failed', r.stopReason, summarize(r))
           else if (r.structured?.passed === false) ph.end('rejected', '未通过', summarize(r))
           else ph.end('done', '', summarize(r))
@@ -473,13 +564,15 @@ export function apply(ctx, config = {}) {
           throw error
         }
       }
-      const callResolved = async (role, route, model, prompt, outputSchema) => {
+      const callResolved = async (role, route, model, prompt, outputSchema, ph) => {
         const childId = randomUUID()
         phaseChildren.set(childId, role)
+        // The panel shows this child's thinking/tool stream until the phase ends.
+        liveChildren.set(childId, { ph, buf: createLiveBuffer(), lastPush: 0 })
         let activation
         try {
           activation = await ctx.subagents.startActivation({
-            provider: backend, label: `code:${role}`, childId, signal: signal,
+            provider: backend, label: `code:${role}`, childId, signal: runSignal,
             delivery: 'caller',
             request: {
               parent, prompt: [{ type: 'text', text: prompt }],
@@ -521,6 +614,7 @@ export function apply(ctx, config = {}) {
           }
         } finally {
           try { await activation?.dispose() } finally {
+            liveChildren.delete(childId)
             phasePresentations.get(childId)?.()
             phasePresentations.delete(childId)
             phaseChildren.delete(childId)
@@ -537,11 +631,12 @@ export function apply(ctx, config = {}) {
         }
         const shell = (command, description) => ctx.tools.execute({
           callId: randomUUID(), rootCallId: exec.rootCallId, parent: exec.token,
-          name: 'ops_bash', agent: parent, signal: signal,
+          name: 'ops_bash', agent: parent, signal: runSignal,
           arguments: { command, description, ...(args.checkWorkdir ? { workdir: args.checkWorkdir } : {}) },
         })
         // Workspace facts the read-only reviewer cannot obtain itself (new files, commits, diff scope).
         const collect = async () => {
+          await gate('采集仓库事实')
           const ph = run.phase('facts', 'git · 本地')
           try {
             const r = await shell('git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "NOT_A_GIT_REPOSITORY"; exit 0; }; echo "## git status --porcelain -uall"; git status --porcelain=v1 -uall; echo "## git diff --stat HEAD"; git diff --stat HEAD; echo "## HEAD"; git log -1 --format="%h %s"', 'Collect workspace facts for independent review')
@@ -553,7 +648,8 @@ export function apply(ctx, config = {}) {
             throw error
           }
         }
-        result = await runPipeline({ task: args.task, mode: args.mode || 'auto', maxRepairs: config.maxRepairs ?? 1, escalation: args.escalation || 'none' }, call, async ({ review }) => {
+        result = await runPipeline({ task: args.task, mode: args.mode || 'auto', maxRepairs: config.maxRepairs ?? 1, escalation: args.escalation || 'none', disabled: routeState.disabled }, call, async ({ review }) => {
+          await gate('独立检查')
           const command = args.checkCommand || 'git diff --check'
           const ph = run.phase('check', `${command} · 本地`)
           let inspected = false
@@ -578,7 +674,9 @@ export function apply(ctx, config = {}) {
           return { passed: false, findings: ['Independent check did not return a successful exit code.'] }
         }, collect)
       } catch (error) {
-        if (error?.code === 'MISSING_CREDENTIAL') {
+        if (error?.code === 'STOPPED' || control.stopped) {
+          result = { status: 'stopped', reason: '你终止了这次运行；已完成的步骤保留在面板里，未验证任何结果。' }
+        } else if (error?.code === 'MISSING_CREDENTIAL') {
           result = {
             status: 'needs_configuration', route: error.route, sessionId: error.sessionId,
             reason: 'Configure this provider credential in DSH Models settings; no code completion was verified.',
@@ -594,6 +692,7 @@ export function apply(ctx, config = {}) {
             : { status: 'halted', reason: 'A phase failed or its model route is unavailable; no completion was verified.', detail: String(error?.message || 'unknown').slice(0, 240) }
         }
       } finally {
+        runControls.delete(run.id)
         run.finish(result)
         // Archive the finished run so the panel can still show it after the next run or a restart.
         try { history.add(tracker.snapshot().runs[0]) } catch { /* history is best effort */ }

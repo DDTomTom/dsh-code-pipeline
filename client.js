@@ -28,6 +28,11 @@ window.__ModuleLoader__.load({
         preparing: '正在准备…', noTask: '（无任务描述）',
         mode: '模式', attempt: n => `第 ${n} 次执行`, escalation: v => `升级 ${v}`, elapsed: '用时',
         health: '功能状态：', recheck: '重新检测', checking: '检测中…', details: '点击查看检测详情',
+        stop: '终止', stopping: '正在终止…', stopTitle: '立刻终止这次运行；已完成的步骤会保留',
+        stageOn: '启用这个环节', stageOff: '已关闭：这个环节会被跳过', stageSkipped: '这个环节已关闭，运行时会跳过', skippedShort: '跳过',
+        waitTitle: '要继续吗？', waitContinue: '继续运行', waitLeft: '秒后自动继续',
+        waitBody: (m, n) => `这次运行已经到 ${m} 分钟。${n ? `继续的话本轮再给 ${n} 分钟，到点会再问你一次。` : '继续之后不再询问。'}`,
+        waitStopped: '已终止',
         allOk: '工具已注册，各阶段模型线路均可解析。',
         routeBad: (role, route, why) => `✗ ${role}：${route}${why ? ' — ' + why : ''}`,
         toolMissing: 'code_pipeline 工具未注册（插件未装载或已停用）。',
@@ -38,6 +43,8 @@ window.__ModuleLoader__.load({
         saving: '保存中…', saved: n => `已保存并应用（${n} 个环节）`, noChange: '没有改动',
         saveFailed: '保存失败：', loadFailed: '读取设置失败：',
         modelTitle: '该环节使用的模型', effortTitle: '推理等级：', currentEffort: '当前推理等级',
+        live: { thinking: '正在思考', reply: '正在写结论', tool: '正在调用' },
+        limit: n => `单次运行上限 ${n} 分钟`,
         noEffort: '该模型没有可调推理等级', fixedEffort: '固定',
         langTitle: '语言 / Language',
         modeTitle: '流水线模式', modeHint: '这是全局默认；本会话可用 /pipeline 单独设置',
@@ -52,7 +59,7 @@ window.__ModuleLoader__.load({
         pillRunning: '流水线运行中', pillIdle: text => `流水线 · ${text}`,
         roles: {
           direction: '定向', planning: '规划', design: '设计', execution: '执行', verification: '复核',
-          deepReview: '深度复核', emergencyFable: 'Fable 诊断', emergencyAstra: 'Astra 诊断',
+          deepReview: '深度复核', diagnostics: '诊断', emergencyFable: 'Fable 诊断', emergencyAstra: 'Astra 诊断',
           facts: '采集仓库事实', check: '独立检查', summarize: '总结',
         },
         status: {
@@ -72,6 +79,11 @@ window.__ModuleLoader__.load({
         preparing: 'Preparing…', noTask: '(no task text)',
         mode: 'mode', attempt: n => `attempt ${n}`, escalation: v => `escalated ${v}`, elapsed: 'elapsed',
         health: 'Status: ', recheck: 'Check now', checking: 'Checking…', details: 'Click for details',
+        stop: 'Stop', stopping: 'Stopping…', stopTitle: 'Stop this run now; finished steps stay in the panel',
+        stageOn: 'Run this stage', stageOff: 'Off: this stage is skipped', stageSkipped: 'This stage is switched off and will be skipped', skippedShort: 'skipped',
+        waitTitle: 'Keep going?', waitContinue: 'Continue', waitLeft: 's until it continues by itself',
+        waitBody: (m, n) => `This run reached ${m} minutes. ${n ? `Continuing adds ${n} more minutes, then I ask once more.` : 'After this it will not ask again.'}`,
+        waitStopped: 'Stopped',
         allOk: 'Tool registered; every stage route resolves.',
         routeBad: (role, route, why) => `✗ ${role}: ${route}${why ? ' — ' + why : ''}`,
         toolMissing: 'The code_pipeline tool is not registered (plugin missing or disabled).',
@@ -82,6 +94,8 @@ window.__ModuleLoader__.load({
         saving: 'Saving…', saved: n => `Saved and applied (${n} stage${n > 1 ? 's' : ''})`, noChange: 'Nothing changed',
         saveFailed: 'Save failed: ', loadFailed: 'Could not read settings: ',
         modelTitle: 'Model used by this stage', effortTitle: 'Reasoning effort: ', currentEffort: 'Current reasoning effort',
+        live: { thinking: 'Thinking', reply: 'Writing the answer', tool: 'Calling' },
+        limit: n => `Per-run limit: ${n} min`,
         noEffort: 'This model has no adjustable reasoning effort', fixedEffort: 'fixed',
         langTitle: 'Language / 语言',
         modeTitle: 'Pipeline mode', modeHint: 'Global default; /pipeline overrides it per session',
@@ -96,7 +110,7 @@ window.__ModuleLoader__.load({
         pillRunning: 'pipeline running', pillIdle: text => `pipeline · ${text}`,
         roles: {
           direction: 'Direction', planning: 'Planning', design: 'Design', execution: 'Execution', verification: 'Review',
-          deepReview: 'Deep review', emergencyFable: 'Fable diagnosis', emergencyAstra: 'Astra diagnosis',
+          deepReview: 'Deep review', diagnostics: 'Diagnosis', emergencyFable: 'Fable diagnosis', emergencyAstra: 'Astra diagnosis',
           facts: 'Workspace facts', check: 'Independent check', summarize: 'Summary',
         },
         status: {
@@ -160,8 +174,16 @@ window.__ModuleLoader__.load({
 .dcp-caret{color:#9ca3af;font-size:10px;margin-left:2px}
 .dcp-detail{grid-column:1 / 4;margin:2px 0 4px;padding:6px 8px;border-radius:6px;background:#f3f4f6;
   color:#374151;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;user-select:text}
-.dcp-summary{margin:6px 0 2px;padding:7px 9px;border-radius:8px;background:#eef2ff;border:1px solid #dbeafe;
-  color:#1f2328;font-size:12px;line-height:1.6;white-space:pre-wrap;user-select:text}
+.dcp-live{grid-column:1 / 4;margin:2px 0 4px;padding:5px 8px;border-radius:6px;background:#f7faff;
+  border:1px solid #e3ebfa;max-height:66px;overflow:hidden;user-select:text}
+.dcp-live-tag{color:${BLUE};font-weight:600;font-size:11px;white-space:nowrap}
+.dcp-live-text{display:block;margin-top:1px;color:#4b5563;font-size:10.5px;line-height:1.45;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-word;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.dcp-live-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:${BLUE};
+  margin-left:4px;vertical-align:middle;animation:dcp-blink 1.1s ease-in-out infinite}
+@keyframes dcp-blink{0%,100%{opacity:.25}50%{opacity:1}}
+.dcp-summary{margin:6px 0 2px;padding:7px 9px;border-radius:8px;background:#eef2ff;border:1px solid #dbeafe;  color:#1f2328;font-size:12px;line-height:1.6;white-space:pre-wrap;user-select:text}
 .dcp-summary b{color:${BLUE};display:block;font-size:11.5px;margin-bottom:2px}
 .dcp-body{position:relative;overscroll-behavior:contain;scrollbar-gutter:stable}
 .dcp-top{position:sticky;top:0;float:right;z-index:2;margin:-2px 0 2px 4px;border:1px solid #d1d5db;
@@ -197,9 +219,15 @@ window.__ModuleLoader__.load({
 .dcp-foot:hover{background:#fafafa}
 .dcp-foot-text{flex:1;min-width:0;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dcp-issues{padding:0 10px 8px;color:#374151;font-size:11.5px;user-select:text}
-.dcp-stage{display:grid;grid-template-columns:52px minmax(0,1fr) 84px 54px;gap:4px 6px;align-items:center;
+.dcp-stage{display:grid;grid-template-columns:16px 52px minmax(0,1fr) 84px 54px;gap:4px 6px;align-items:center;
   padding:5px 0;border-top:1px dashed #f0f1f3}
 .dcp-stage:first-child{border-top:none}
+.dcp-check{margin:0;width:13px;height:13px;accent-color:${BLUE};cursor:pointer}
+.dcp-modal{position:absolute;inset:0;background:rgba(255,255,255,.86);display:flex;align-items:center;justify-content:center;padding:16px;z-index:5}
+.dcp-modal-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.14);padding:12px 14px;max-width:340px}
+.dcp-modal-title{color:${BLUE};font-weight:700;font-size:13px;margin-bottom:4px}
+.dcp-modal-body{color:#374151;font-size:12px;line-height:1.6;margin-bottom:10px}
+.dcp-modal-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
 .dcp-stage-label{color:${BLUE};font-weight:600;font-size:12px;white-space:nowrap}
 .dcp-select{width:100%;box-sizing:border-box;height:26px;border:1px solid #d1d5db;border-radius:6px;
   background:#fff;color:#111827;font-size:11.5px;padding:0 4px}
@@ -267,6 +295,14 @@ window.__ModuleLoader__.load({
         h('span', { className: 'dcp-time' }, fmt(end - phase.startedAt)),
         phase.route ? h('span', { className: 'dcp-model' }, phase.route) : null,
         phase.note ? h('span', { className: 'dcp-note' }, phase.note) : null,
+        phase.status === 'running' && phase.live
+          ? h('div', { className: 'dcp-live', title: phase.live.text || '' },
+              h('span', { className: 'dcp-live-tag' },
+                (t.live && t.live[phase.live.kind]) || phase.live.kind,
+                phase.live.tool ? ` ${phase.live.tool}` : ''),
+              phase.live.text ? h('span', { className: 'dcp-live-text' }, phase.live.text) : null,
+              h('span', { className: 'dcp-live-dot' }))
+          : null,
         open ? h('div', { className: 'dcp-detail' }, loading ? t.loadingDetail : (detail || t.noDetail)) : null)
       return row
     }
@@ -310,10 +346,15 @@ window.__ModuleLoader__.load({
         const [provider, model] = value.split('\u0000')
         onChange({ ...stage, provider, model, effort: '' })
       }
-      return h('div', { className: 'dcp-stage' },
+      const enabled = stage.enabled !== false
+      return h('div', { className: 'dcp-stage', style: enabled ? undefined : { opacity: 0.55 } },
+        h('input', {
+          className: 'dcp-check', type: 'checkbox', checked: enabled, title: enabled ? t.stageOn : t.stageOff,
+          'aria-label': t.stageOn, onChange: e => onChange({ ...stage, enabled: e.target.checked }),
+        }),
         h('span', { className: 'dcp-stage-label' }, t.roles[stage.role] || stage.label),
         h('select', {
-          className: 'dcp-select', value: `${stage.provider}\u0000${stage.model}`,
+          className: 'dcp-select', value: `${stage.provider}\u0000${stage.model}`, disabled: !enabled,
           onChange: e => pick(e.target.value), title: t.modelTitle,
         },
           (catalog ? catalog.providers : []).map(p => h('optgroup', { key: p.id, label: p.name },
@@ -324,13 +365,13 @@ window.__ModuleLoader__.load({
         efforts.length > 1
           ? h('input', {
               className: 'dcp-slider', type: 'range', min: 0, max: efforts.length - 1, step: 1,
-              value: effortIndex, title: t.effortTitle + efforts[effortIndex].name,
+              value: effortIndex, disabled: !enabled, title: t.effortTitle + efforts[effortIndex].name,
               onChange: e => onChange({ ...stage, effort: efforts[Number(e.target.value)].id }),
             })
           : h('span', { className: 'dcp-effort-off', title: efforts.length === 1 ? t.fixedEffort : t.noEffort },
               efforts.length === 1 ? t.fixedEffort : '—'),
-        h('span', { className: 'dcp-effort-name', title: t.currentEffort },
-          efforts.length ? efforts[effortIndex].name : ''))
+        h('span', { className: 'dcp-effort-name', title: enabled ? t.currentEffort : t.stageSkipped },
+          enabled ? (efforts.length ? efforts[effortIndex].name : '') : t.skippedShort))
     }
 
     function SettingsView({ onClose, t }) {
@@ -360,7 +401,7 @@ window.__ModuleLoader__.load({
         // t only changes the message language; reloading the catalog on a language switch is harmless.
       }, [t])
 
-      const stageKey = s => `${s.role}\u0000${s.provider}\u0000${s.model}\u0000${s.effort || ''}`
+      const stageKey = s => `${s.role}\u0000${s.provider}\u0000${s.model}\u0000${s.effort || ''}\u0000${s.enabled === false ? '0' : '1'}`
       // Only send what changed, so untouched stages keep following the bundle's configured default.
       const changed = () => (stages || []).filter(s => {
         const before = (initial || []).find(i => i.role === s.role)
@@ -375,7 +416,7 @@ window.__ModuleLoader__.load({
         try {
           const res = await fetch('/dsh-code-pipeline/settings', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ routes: patch.map(s => ({ role: s.role, provider: s.provider, model: s.model, effort: s.effort || '' })) }),
+            body: JSON.stringify({ routes: patch.map(s => ({ role: s.role, provider: s.provider, model: s.model, effort: s.effort || '', enabled: s.enabled !== false })) }),
           })
           const body = await res.json()
           if (!res.ok || body.ok !== true) throw new Error(body.reason || String(res.status))
@@ -414,6 +455,7 @@ window.__ModuleLoader__.load({
       const [hiddenUntilRun, setHiddenUntilRun] = useState(null)
       const [showIssues, setShowIssues] = useState(false)
       const [probing, setProbing] = useState(false)
+      const [stopping, setStopping] = useState(false)
       const [clock, setClock] = useState(Date.now())
       const [view, setView] = useState('progress')
       const [langOpen, setLangOpen] = useState(false)
@@ -439,6 +481,8 @@ window.__ModuleLoader__.load({
       const active = runs.filter(r => r.status === 'running')
       const shown = active.length ? active : runs.slice(0, 1)
       const running = active.length > 0
+      const activeRun = runs.find(r => r.status === 'running' || r.status === 'waiting')
+      const waitingRun = runs.find(r => r.status === 'waiting')
       const skew = state ? Date.now() - state.now : 0 // align Host timestamps with this clock
       const now = clock - skew
 
@@ -610,6 +654,20 @@ window.__ModuleLoader__.load({
         try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
         if (d) setPrefs(p => { savePrefs(p); return p })
         return d ? d.moved : false
+      }
+
+      const controlRun = async kind => {
+        const target = (stateRef.current && stateRef.current.runs || []).find(r => r.status === 'running' || r.status === 'waiting')
+        if (!target) return
+        if (kind === 'stop') setStopping(true)
+        try {
+          const res = await fetch(`/dsh-code-pipeline/${kind}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ runId: target.id }),
+          })
+          const body = await res.json().catch(() => ({}))
+          if (res.ok) { setState(body); setOffline(false) }
+        } catch { /* the poll below will catch up */ } finally { if (kind === 'stop') setStopping(false) }
       }
 
       const probe = async () => {
@@ -806,6 +864,12 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'dcp-foot', onClick: () => setShowIssues(v => !v), title: t.details },
                   h('span', { className: 'dcp-dot', style: { background: dotColor } }),
                   h('span', { className: 'dcp-foot-text' }, t.health + healthText),
+                  activeRun
+                    ? h('button', {
+                        type: 'button', className: 'dcp-btn dcp-stop', title: t.stopTitle, disabled: stopping,
+                        onClick: e => { e.stopPropagation(); controlRun('stop') },
+                      }, stopping ? t.stopping : t.stop)
+                    : null,
                   h('button', {
                     type: 'button', className: 'dcp-btn', title: t.summaryTitle,
                     disabled: !runs.length || Boolean(summarizing),
@@ -816,6 +880,24 @@ window.__ModuleLoader__.load({
                     onClick: e => { e.stopPropagation(); setView('history') },
                   }, `${t.history}${historyRuns.length ? ` (${historyRuns.length})` : ''}`),
                   h('button', { type: 'button', className: 'dcp-btn', onClick: e => { e.stopPropagation(); probe() }, disabled: probing }, probing ? t.checking : t.recheck)),
+                waitingRun
+                  ? h('div', { className: 'dcp-modal' },
+                      h('div', { className: 'dcp-modal-card' },
+                        h('div', { className: 'dcp-modal-title' }, t.waitTitle),
+                        h('div', { className: 'dcp-modal-body' },
+                          t.waitBody(waitingRun.waiting.minutes, waitingRun.waiting.nextMinutes),
+                          h('div', { style: { color: '#6b7280', marginTop: 4 } },
+                            `${Math.max(0, Math.ceil((waitingRun.waiting.deadlineAt - now) / 1000))} ${t.waitLeft}`)),
+                        h('div', { className: 'dcp-modal-actions' },
+                          h('button', {
+                            type: 'button', className: 'dcp-btn', disabled: stopping,
+                            onClick: e => { e.stopPropagation(); controlRun('stop') },
+                          }, stopping ? t.stopping : t.stop),
+                          h('button', {
+                            type: 'button', className: 'dcp-primary',
+                            onClick: e => { e.stopPropagation(); controlRun('continue') },
+                          }, t.waitContinue))))
+                  : null,
                 showIssues
                   ? h('ul', { className: 'dcp-issues' },
                       offline ? h('li', null, t.offline)

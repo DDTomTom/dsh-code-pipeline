@@ -15,10 +15,10 @@ test('saved overrides win over the bundle config and persist across a reload', (
   const dir = mkdtempSync(join(tmpdir(), 'cp-settings-'))
   try {
     const file = join(dir, 'routes.json')
-    assert.deepEqual(mergeRoutes(base, {}), base)
-    assert.equal(saveRouteOverrides(file, { planning: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' } }), true)
+    assert.deepEqual(mergeRoutes(base, {}, []), base)
+    assert.equal(saveRouteOverrides(file, { routes: { planning: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' } }, disabled: [] }), true)
     const loaded = loadRouteOverrides(file)
-    const merged = mergeRoutes(base, loaded)
+    const merged = mergeRoutes(base, loaded.routes, loaded.disabled)
     assert.deepEqual(merged.planning, { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' })
     assert.deepEqual(merged.direction, base.direction, 'untouched roles keep the bundle config')
   } finally { rmSync(dir, { recursive: true, force: true }) }
@@ -27,9 +27,9 @@ test('saved overrides win over the bundle config and persist across a reload', (
 test('an unreadable or foreign override file degrades to no overrides', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cp-settings-'))
   try {
-    assert.deepEqual(loadRouteOverrides(join(dir, 'missing.json')), {})
-    saveRouteOverrides(join(dir, 'x.json'), { notARole: { provider: 'openai', model: 'x' } })
-    assert.deepEqual(loadRouteOverrides(join(dir, 'x.json')), {})
+    assert.deepEqual(loadRouteOverrides(join(dir, 'missing.json')), { routes: {}, disabled: [] })
+    saveRouteOverrides(join(dir, 'x.json'), { routes: { notARole: { provider: 'openai', model: 'x' } }, disabled: ['nope'] })
+    assert.deepEqual(loadRouteOverrides(join(dir, 'x.json')), { routes: {}, disabled: [] })
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -55,7 +55,7 @@ test('a patch installs only combinations the catalog actually advertises', () =>
 })
 
 test('every stage the panel lists is a role the pipeline knows', () => {
-  assert.deepEqual(STAGE_ROLES, ['direction', 'planning', 'design', 'execution', 'verification', 'deepReview', 'emergencyFable', 'emergencyAstra', 'summarize'])
+  assert.deepEqual(STAGE_ROLES, ['direction', 'planning', 'design', 'execution', 'verification', 'deepReview', 'diagnostics', 'summarize'])
   for (const role of STAGE_ROLES) assert.equal(typeof roleLabel(role), 'string')
   assert.equal(roleLabel('summarize'), '总结')
 })

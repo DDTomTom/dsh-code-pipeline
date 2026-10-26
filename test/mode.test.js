@@ -85,13 +85,11 @@ test('/pipeline routes reports resolvable and broken routes without model calls'
   const dir = mkdtempSync(join(tmpdir(), 'cp-mode-'))
   try {
     const h = harness({ stateFile: join(dir, 'm.json'), routes: {
-      emergencyFable: { provider: 'anthropic', model: 'latest-fable' },
-      emergencyAstra: { provider: 'openai', model: 'latest-astra' },
+      diagnostics: { provider: 'anthropic', model: 'latest-fable' },
       execution: { provider: 'deepseek-account', model: 'missing-model' },
     } })
     const { text } = await h.command({ id: 's' }, 'routes')
-    assert.match(text, /✓ emergencyFable: anthropic\/claude-fable-5-1/)
-    assert.match(text, /✗ emergencyAstra: .*no astra model/)
+    assert.match(text, /✓ diagnostics: anthropic\/claude-fable-5-1/)
     assert.match(text, /✗ execution: .*unknown model/)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
