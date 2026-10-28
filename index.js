@@ -193,19 +193,30 @@ export function apply(ctx, config = {}) {
     catalog = { at: Date.now(), providers, models }
     return catalog
   }
+  // A lookup that fails once (credentials not loaded yet, adapter still mounting after a plugin
+  // reload) must not freeze the row for the rest of the session: only successful, non-empty answers
+  // are cached for long, empty ones expire in a few seconds so the next open retries.
+  const EFFORT_OK_TTL = 10 * 60 * 1000
+  const EFFORT_EMPTY_TTL = 4000
   const effortsOf = async (provider, model) => {
     const key = `${provider}/${model}`
-    if (!effortsCache.has(key)) {
-      let efforts = []
-      try {
-        const info = await ctx.llm.resolveModelInfo(provider, model, pluginAbort.signal)
-        efforts = (info?.reasoning?.efforts || []).map(e => ({ id: String(e.id), name: e.name || String(e.id), ...(e.description ? { description: e.description } : {}) }))
-        efforts.default = info?.reasoning?.defaultEffort ? String(info.reasoning.defaultEffort) : undefined
-      } catch { /* an unresolvable route offers no efforts */ }
-      effortsCache.set(key, efforts)
+    const hit = effortsCache.get(key)
+    const ttl = hit && hit.efforts.length ? EFFORT_OK_TTL : EFFORT_EMPTY_TTL
+    if (hit && Date.now() - hit.at < ttl) return hit.efforts
+    let efforts = []
+    let error = ''
+    try {
+      const info = await ctx.llm.resolveModelInfo(provider, model, pluginAbort.signal)
+      efforts = (info?.reasoning?.efforts || []).map(e => ({ id: String(e.id), name: e.name || String(e.id), ...(e.description ? { description: e.description } : {}) }))
+      efforts.default = info?.reasoning?.defaultEffort ? String(info.reasoning.defaultEffort) : undefined
+      if (!efforts.length) error = 'adapter reports no reasoning efforts for this model'
+    } catch (e) {
+      error = String((e && e.message) || e)
     }
-    return effortsCache.get(key)
+    effortsCache.set(key, { at: Date.now(), efforts, error })
+    return efforts
   }
+  const effortsErrorOf = (provider, model) => effortsCache.get(`${provider}/${model}`)?.error || ''
   const settingsView = async () => {
     const cat = await loadCatalog()
     const configured = mergeAllRoutes(baseRoutes, routeState.routes)
@@ -227,6 +238,7 @@ export function apply(ctx, config = {}) {
         enabled: !off.has(role),
         effort: route.effort || '', efforts: [...efforts],
         defaultEffort: efforts.default || '',
+        effortsError: effortsErrorOf(route.provider, model),
       })
     }
     return { roles, providers: cat.providers, models: cat.models, limits: { firstMinutes, nextMinutes, askWindowMs } }
@@ -253,7 +265,9 @@ export function apply(ctx, config = {}) {
       const effort = item.effort ? String(item.effort) : ''
       if (!effort) continue
       const supported = await effortsOf(String(item.provider), String(item.model))
-      if (!supported.some(e => e.id === effort)) return { ok: false, reason: `${item.model} 不支持推理等级 ${effort}` }
+      // An adapter that reports no efforts tells us nothing to validate against; rejecting the save
+      // there would lock the whole panel just because one provider's capabilities did not resolve.
+      if (supported.length && !supported.some(e => e.id === effort)) return { ok: false, reason: `${item.model} 不支持推理等级 ${effort}` }
     }
     routeState = { routes: checked.routes, disabled: checked.disabled }
     saveRouteOverrides(routesFile, routeState)

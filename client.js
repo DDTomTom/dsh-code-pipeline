@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
     const I18N = {
       zh: {
         panelTitle: '代码流水线', panelRunning: '代码流水线 · 运行中', settingsTitle: '各环节模型设置',
-        pillHint: '代码流水线 · 点击展开，拖动可移动',
+        pillHint: '代码流水线 · 点击展开，拖动可移动，双击回到默认位置', pillClose: '关掉这个小球，下次运行会自己回来',
         dragHint: '拖动移动，双击回到默认位置',
         titleOpen: '点标题打开各环节模型设置', titleBack: '点标题返回运行进度',
         collapse: '收起', close: '关闭（下次运行时自动出现）',
@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
       },
       en: {
         panelTitle: 'Code pipeline', panelRunning: 'Code pipeline · running', settingsTitle: 'Stage models',
-        pillHint: 'Code pipeline — click to expand, drag to move',
+        pillHint: 'Code pipeline — click to expand, drag to move, double-click to reset', pillClose: 'Hide until the next run',
         dragHint: 'Drag to move, double-click to reset',
         titleOpen: 'Click the title to open stage settings', titleBack: 'Click the title to return to progress',
         collapse: 'Collapse', close: 'Close (reappears on the next run)',
@@ -243,9 +243,14 @@ window.__ModuleLoader__.load({
 .dcp-primary:disabled{opacity:.55;cursor:default}
 .dcp-btn{border:1px solid #d1d5db;background:#fff;color:#111827;border-radius:6px;font-size:11.5px;padding:2px 8px;cursor:pointer}
 .dcp-btn:hover{background:#f3f4f6}
-.dcp-pill{position:fixed;z-index:60;display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
-  background:#ffffff;border:1px solid #e5e7eb;border-radius:999px;box-shadow:0 4px 14px rgba(15,23,42,.14);
-  font-size:12px;color:#1f2328;cursor:pointer;pointer-events:auto;user-select:none}
+.dcp-pill{position:fixed;z-index:60;display:inline-flex;align-items:center;gap:6px;padding:3px 8px;
+  background:rgba(255,255,255,.92);border:1px solid #e5e7eb;border-radius:999px;box-shadow:0 3px 10px rgba(15,23,42,.10);
+  font-size:11.5px;color:#1f2328;cursor:grab;pointer-events:auto;user-select:none;opacity:.55;
+  transition:opacity .12s ease, box-shadow .12s ease}
+.dcp-pill:hover{opacity:1;box-shadow:0 6px 18px rgba(15,23,42,.18)}
+.dcp-pill:active{cursor:grabbing}
+.dcp-pill-x{border:0;background:none;color:#9ca3af;font-size:12px;line-height:1;padding:0 1px;cursor:pointer}
+.dcp-pill-x:hover{color:#111827}
 .dcp-pill b{color:${BLUE};font-weight:600}
 .dcp-pill i{color:${GREEN};font-style:normal;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
 `
@@ -691,13 +696,16 @@ window.__ModuleLoader__.load({
         : null
 
       // Clamp into the current viewport so a position saved in a larger window stays reachable.
+      // The top inset keeps the pill off the app's tab strip and window buttons: a 26px pill parked
+      // at y=8 covered the session tabs, and the user could no longer click them.
+      const TOP_INSET = 56
       const size = prefs.collapsed ? { w: 240, h: 36 } : { w: 356, h: 340 }
-      const clamp = (value, max) => Math.max(8, Math.min(value, Math.max(8, max)))
+      const clamp = (value, min, max) => Math.max(min, Math.min(value, Math.max(min, max)))
       const pos = prefs.x == null || prefs.y == null
         ? { right: 20, bottom: 110 }
         : {
-            left: clamp(prefs.x, viewport.w - size.w - 8),
-            top: clamp(prefs.y, viewport.h - size.h - 8),
+            left: clamp(prefs.x, 8, viewport.w - size.w - 8),
+            top: clamp(prefs.y, TOP_INSET, viewport.h - size.h - 8),
           }
 
       if (hiddenUntilRun && newestId === hiddenUntilRun) return null
@@ -711,6 +719,7 @@ window.__ModuleLoader__.load({
           h('div', {
             ref: panelRef,
             className: 'dcp-pill', style: pos, title: t.pillHint,
+            onDoubleClick: () => update({ x: null, y: null }),
             onPointerDown, onPointerMove,
             onPointerUp: e => { if (!onPointerUp(e)) update({ collapsed: false }) },
           },
@@ -718,7 +727,14 @@ window.__ModuleLoader__.load({
             cur ? h(React.Fragment, null,
               h('b', null, t.roles[cur.role] || cur.label),
               h('i', null, cur.route.split('/').pop()))
-              : h('span', null, running ? t.pillRunning : t.pillIdle(healthText))))
+              : h('span', null, running ? t.pillRunning : t.pillIdle(healthText)),
+            h('button', {
+              type: 'button', className: 'dcp-pill-x', title: t.pillClose,
+              // Keep the pill from expanding while the close button is hit.
+              onPointerDown: e => e.stopPropagation(),
+              onPointerUp: e => e.stopPropagation(),
+              onClick: e => { e.stopPropagation(); setHiddenUntilRun(newestId || '__none__') },
+            }, '×')))
       }
 
       const settingsOpen = view === 'settings'
