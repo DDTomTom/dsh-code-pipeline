@@ -280,7 +280,7 @@ window.__ModuleLoader__.load({
 
     function StatusIcon({ status }) {
       if (status === 'running') return h('span', { className: 'dcp-st' }, h('span', { className: 'dcp-spin' }))
-      const map = { done: ['✓', '#16a34a'], rejected: ['!', '#d97706'], failed: ['✗', '#dc2626'] }
+      const map = { done: ['✓', '#16a34a'], rejected: ['!', '#d97706'], failed: ['✗', '#dc2626'], skipped: ['–', '#9ca3af'] }
       const [ch, color] = map[status] || ['·', '#9ca3af']
       return h('span', { className: 'dcp-st', style: { color, fontWeight: 700 } }, ch)
     }

@@ -601,6 +601,8 @@ export function apply(ctx, config = {}) {
               const log = await ctx.sessionQuery.readSession(childId)
               failure = log.events?.filter(e => e.type === 'turn/end').at(-1)?.data?.reason?.error
             } catch { /* no diagnostic available */ }
+            // No branch below may fall through with a bare "error": the operator needs the upstream
+            // reason (revoked key, quota, malformed tool call) to know what to fix.
             const detail = String(failure?.message || '').slice(0, 400)
             if (failure?.code === 'MISSING_CREDENTIAL') {
               const error = new Error(`${role}: ${route.provider}/${model} requires a configured API credential`)
@@ -609,15 +611,23 @@ export function apply(ctx, config = {}) {
               error.sessionId = childId
               throw error
             }
-            // The route resolves but the account cannot serve it (no credits, quota, billing, revoked key).
-            if (/no credits|credit|billing|quota|insufficient|payment|suspend|unauthorized|invalid api key/i.test(detail)) {
-              const error = new Error(`${role}: ${route.provider}/${model} rejected the request — ${detail}`)
+            const unusable = failure?.code === 'AUTH'
+              || failure?.code === 'QUOTA'
+              || failure?.code === 'RATE_LIMIT'
+              || /no credits|credit|billing|quota|insufficient|payment|suspend|unauthorized|invalid[ _-]?(x-)?api[ -]?key|authentication|permission denied|forbidden/i.test(detail)
+            if (unusable) {
+              const error = new Error(`${role}: ${route.provider}/${model} rejected the request — ${detail || failure?.code || 'no detail'}`)
               error.code = 'PROVIDER_UNUSABLE'
               error.route = `${route.provider}/${model}`
               error.sessionId = childId
-              error.detail = detail
+              error.detail = detail || String(failure?.code || '')
               throw error
             }
+            const error = new Error(`${role}: ${route.provider}/${model} child ${childId} did not complete (${result.stopReason})${detail ? ` — ${detail}` : ''}`)
+            error.code = 'CHILD_FAILED'
+            error.route = `${route.provider}/${model}`
+            error.sessionId = childId
+            throw error
           }
           return {
             sessionId: String(activation.childId || childId),
@@ -649,6 +659,7 @@ export function apply(ctx, config = {}) {
           arguments: { command, description, ...(args.checkWorkdir ? { workdir: args.checkWorkdir } : {}) },
         })
         // Workspace facts the read-only reviewer cannot obtain itself (new files, commits, diff scope).
+        let workspaceFacts = ''
         const collect = async () => {
           await gate('采集仓库事实')
           const ph = run.phase('facts', 'git · 本地')
@@ -656,6 +667,7 @@ export function apply(ctx, config = {}) {
             const r = await shell('git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "NOT_A_GIT_REPOSITORY"; exit 0; }; echo "## git status --porcelain -uall"; git status --porcelain=v1 -uall; echo "## git diff --stat HEAD"; git diff --stat HEAD; echo "## HEAD"; git log -1 --format="%h %s"', 'Collect workspace facts for independent review')
             const out = textOf(r?.value?.stdout).trim()
             ph.end('done', out === 'NOT_A_GIT_REPOSITORY' ? '非 Git 仓库' : '', out === 'NOT_A_GIT_REPOSITORY' ? '' : out)
+            workspaceFacts = out
             return out === 'NOT_A_GIT_REPOSITORY' ? '工作目录不是 Git 仓库：总控无法提供变更清单。' : out
           } catch (error) {
             ph.end('failed', error?.message)
@@ -669,6 +681,16 @@ export function apply(ctx, config = {}) {
           let inspected = false
           try { inspected = reviewObserved((await ctx.sessionQuery.readSession(review.sessionId)).events) } catch { /* fail closed */ }
           if (!inspected) { ph.end('failed', '复核者没有成功读取文件'); return { passed: false, findings: ['No successful read in the independent reviewer session.'] } }
+          // Outside a Git repository the default diff check can only fail (git exits 129). Say so
+          // instead of painting a red cross, and name the way to still get machine verification.
+          if (!args.checkCommand && workspaceFacts === 'NOT_A_GIT_REPOSITORY') {
+            const note = '工作目录不是 Git 仓库，默认的 git diff --check 无法执行'
+            ph.end('skipped', '非 Git 仓库', `${note}；复核者已独立读过文件，但没有机器检查。`)
+            return {
+              passed: false, skipped: true,
+              findings: [`${note}；要在任务里写明测试命令（例如 node --test / npm test），流水线会用那条命令做机器验证。`],
+            }
+          }
           try {
             const check = await shell(command, 'Independently check code task result')
             const value = check.value
@@ -684,8 +706,10 @@ export function apply(ctx, config = {}) {
               return { passed: false, failureKind: 'test_failed', findings: [`${args.checkCommand} exited ${value.exitCode}`, tail] }
             }
             ph.end('failed', Number.isInteger(value?.exitCode) ? `退出码 ${value.exitCode}` : '未得到退出码', `$ ${command}\n${io}`)
+            const reason = (io.split('\n').filter(Boolean).slice(-2).join(' ') || `exit code ${value?.exitCode ?? 'unknown'}`).slice(0, 300)
+            return { passed: false, findings: [`独立检查没有通过（退出码 ${value?.exitCode ?? '未知'}）：${reason}`] }
           } catch (error) { ph.end('failed', error?.message) }
-          return { passed: false, findings: ['Independent check did not return a successful exit code.'] }
+          return { passed: false, findings: ['独立检查没能执行成功。'] }
         }, collect)
       } catch (error) {
         if (error?.code === 'STOPPED' || control.stopped) {
@@ -700,7 +724,7 @@ export function apply(ctx, config = {}) {
           result = error?.code === 'PROVIDER_UNUSABLE'
             ? {
                 status: 'provider_unusable', route: error.route, sessionId: error.sessionId,
-                reason: '这一路线路的账号当前无法提供请求（余额、配额或密钥问题）；没有任何代码结果被验证。',
+                reason: '这一路线路的账号当前无法提供请求（密钥失效、余额或配额问题）；没有任何代码结果被验证。',
                 detail: String(error.detail || error.message || '').slice(0, 240),
               }
             : { status: 'halted', reason: 'A phase failed or its model route is unavailable; no completion was verified.', detail: String(error?.message || 'unknown').slice(0, 240) }

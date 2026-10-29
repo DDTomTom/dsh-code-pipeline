@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-code-pipeline",
-  "version": "0.11.3",
+  "version": "0.11.5",
   "private": true,
   "type": "module",
   "description": "Staged code development with model routing, independent review and a live progress panel",
