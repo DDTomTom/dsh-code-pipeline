@@ -398,6 +398,8 @@ export function apply(ctx, config = {}) {
     if (visible.length) agent.ctx.effect(() => agent.ctx.tools.restrict({ allow: visible }))
     if (role === 'execution') return
     // PTC's run_code transport is too broad for a read-only phase; present native tools instead.
+    // `presentAs` is optional in the host API — a build without it must not crash the run.
+    if (typeof agent.ctx.tools?.presentAs !== 'function') return
     const dispose = agent.ctx.tools.presentAs('native')
     let active = true
     const release = () => { if (active) { active = false; dispose() } }
@@ -653,11 +655,21 @@ export function apply(ctx, config = {}) {
           if (value && typeof value === 'object') return String(value.text ?? value.content ?? '')
           return value == null ? '' : String(value)
         }
-        const shell = (command, description) => ctx.tools.execute({
-          callId: randomUUID(), rootCallId: exec.rootCallId, parent: exec.token,
-          name: 'ops_bash', agent: parent, signal: runSignal,
-          arguments: { command, description, ...(args.checkWorkdir ? { workdir: args.checkWorkdir } : {}) },
-        })
+        // The host tool dispatcher takes a batch of tool calls, not one bare call.
+        const shell = async (command, description) => {
+          const callArgs = { command, description, ...(args.checkWorkdir ? { workdir: args.checkWorkdir } : {}) }
+          const batch = await ctx.tools.execute({
+            calls: [{ type: 'tool-call', id: randomUUID(), name: 'ops_bash', arguments: JSON.stringify(callArgs) }],
+            signal: runSignal,
+            agent: parent,
+          })
+          const first = Array.isArray(batch?.results) ? batch.results[0] : undefined
+          if (!first) throw new Error(`ops_bash returned no result${batch?.results ? '' : ' (unexpected dispatcher reply)'}`)
+          // The batch dispatcher wraps each outcome as { callId, result } where result is a ToolExecutionResult.
+          const outcome = first.result ?? first
+          if (outcome.isError && outcome.error?.message) throw new Error(String(outcome.error.message).slice(0, 300))
+          return outcome
+        }
         // Workspace facts the read-only reviewer cannot obtain itself (new files, commits, diff scope).
         let workspaceFacts = ''
         const collect = async () => {
@@ -708,7 +720,10 @@ export function apply(ctx, config = {}) {
             ph.end('failed', Number.isInteger(value?.exitCode) ? `退出码 ${value.exitCode}` : '未得到退出码', `$ ${command}\n${io}`)
             const reason = (io.split('\n').filter(Boolean).slice(-2).join(' ') || `exit code ${value?.exitCode ?? 'unknown'}`).slice(0, 300)
             return { passed: false, findings: [`独立检查没有通过（退出码 ${value?.exitCode ?? '未知'}）：${reason}`] }
-          } catch (error) { ph.end('failed', error?.message) }
+          } catch (error) {
+            ph.end('failed', error?.message)
+            return { passed: false, findings: [`独立检查执行失败：${String(error?.message || error).slice(0, 200)}`] }
+          }
           return { passed: false, findings: ['独立检查没能执行成功。'] }
         }, collect)
       } catch (error) {

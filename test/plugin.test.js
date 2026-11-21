@@ -21,11 +21,14 @@ test('native structured_output remains available to reviewer and executor cannot
       guard: fn => { guard = fn; return () => {} },
       schemas: () => [{ name: 'read' }, { name: 'write' }, { name: 'ops_read_files' }],
       register: def => { tool = def; return () => {} },
-      execute: async request => {
-        assert.equal(request.arguments.workdir, 'C:/repo')
-        if (request.arguments.command.startsWith('git rev-parse')) return { isError: false, value: { status: 'completed', exitCode: 0, stdout: '## git status --porcelain -uall\n M parser.js\n' } }
-        assert.equal(request.arguments.command, 'node --test')
-        return { isError: false, value: { status: 'completed', exitCode: 0 } }
+      execute: async batch => {
+        const call = batch.calls[0]
+        assert.equal(call.name, 'ops_bash')
+        const callArgs = JSON.parse(call.arguments)
+        assert.equal(callArgs.workdir, 'C:/repo')
+        if (callArgs.command.startsWith('git rev-parse')) return { results: [{ callId: call.id, result: { isError: false, value: { status: 'completed', exitCode: 0, stdout: '## git status --porcelain -uall\n M parser.js\n' } } }] }
+        assert.equal(callArgs.command, 'node --test')
+        return { results: [{ callId: call.id, result: { isError: false, value: { status: 'completed', exitCode: 0 } } }] }
       },
     },
     systemPrompt: { section: spec => { section = spec; return () => {} } },
